@@ -297,7 +297,102 @@ type LLMProvider = "anthropic" | "openai" | "any";
 
 ---
 
-### 6. category
+### 6. mcp (MCP 集成)
+
+**类型**: `MCPConfig`  
+**必填**: ❌（可选）
+
+MCP (Model Context Protocol) 配置，让 Agent 能够调用外部工具和服务。
+
+```typescript
+interface MCPConfig {
+  config_path?: string;           // MCP 配置文件路径（相对于 agent.json）
+  required_servers: MCPServerDefinition[];
+}
+
+interface MCPServerDefinition {
+  name: string;                   // Server 名称
+  description?: string;           // Server 描述
+  package: string;                // NPM 包名（用于自动安装）
+  version?: string;               // 版本约束（如 "^1.0.0"）
+  tools: string[];                // 需要的工具列表
+  required_env?: string[];        // 必需的环境变量
+  optional?: boolean;             // 是否可选（默认 false）
+}
+```
+
+#### 示例：包含 MCP 配置的 Agent
+
+**目录结构**:
+```
+tapd-task-manager/
+├── agent.json              # 声明需要 TAPD MCP server
+├── worker.yaml
+├── mcp/                    # MCP 配置（打包在 Agent 内）
+│   ├── servers.json        # MCP server 配置
+│   └── README.md           # 用户配置说明
+└── README.md
+```
+
+**agent.json**:
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "tapd-task-manager",
+    "version": "1.0.0"
+  },
+  "mcp": {
+    "config_path": "./mcp/servers.json",
+    "required_servers": [
+      {
+        "name": "tapd",
+        "description": "TAPD project management MCP server",
+        "package": "@openpeng/mcp-tapd",
+        "version": "^1.0.0",
+        "tools": [
+          "tapd_create_story",
+          "tapd_list_stories"
+        ],
+        "required_env": [
+          "TAPD_API_KEY",
+          "TAPD_WORKSPACE_ID"
+        ],
+        "optional": false
+      }
+    ]
+  }
+}
+```
+
+**mcp/servers.json**:
+```json
+{
+  "servers": {
+    "tapd": {
+      "command": "npx",
+      "args": ["-y", "@openpeng/mcp-tapd@^1.0.0"],
+      "env": {
+        "TAPD_API_KEY": "${TAPD_API_KEY}",
+        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
+      }
+    }
+  }
+}
+```
+
+用户下载 Agent 后，只需配置环境变量即可使用 MCP tools：
+```bash
+export TAPD_API_KEY=your_key
+export TAPD_WORKSPACE_ID=12345
+agent-deploy run ./tapd-task-manager
+```
+
+详见：[MCP Integration 规范](./mcp-integration.md)
+
+---
+
+### 7. category
 
 **类型**: `Category`  
 **必填**: ❌（可选）
@@ -328,7 +423,7 @@ type Category =
 
 ---
 
-### 7. type
+### 8. type
 
 **类型**: `AgentType`  
 **必填**: ❌（可选）
@@ -337,31 +432,141 @@ Agent 的类型分类。
 
 ```typescript
 type AgentType = 
-  | "agent"      // 完整的 Agent（有 pipeline）
-  | "skill"      // 简单技能（单步操作）
-  | "workflow";  // 工作流（多步编排）
+  | "agent"      // 完整的 Agent（默认）
+  | "skill";     // 可复用的 Skill（作为 subagent）
 ```
 
 #### 区别
 
-**agent**（推荐）：
+**agent**（默认）：
+- 可独立发布到 Market
 - 有完整的 pipeline
-- 可以调用多个工具
-- 有复杂的逻辑编排
+- 可以包含 Skills（作为 subagents）
 
-**skill**（简化版）：
-- 单一功能
-- 通常只有一个 pipeline 步骤
-- 适合简单任务
+**skill**：
+- 作为其他 Agent 的 subagent
+- 单一职责，参数化
+- 打包在 Agent 内部发布
 
-**workflow**（复杂版）：
-- 多个子 Agent 协作
-- 有条件分支和循环
-- 适合复杂业务流程
+#### 示例：Skill 定义
+
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "text-summarizer",
+    "version": "1.0.0"
+  },
+  "type": "skill",
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true
+    },
+    "max_length": {
+      "type": "number",
+      "default": 200
+    }
+  }
+}
+```
+
+#### 示例：Agent 包含 Skills
+
+**目录结构**:
+```
+content-processor/
+├── agent.json
+├── orchestrator.yaml
+└── skills/                 # Skills 打包在 Agent 内
+    ├── text-summarizer/
+    │   ├── agent.json      # type: "skill"
+    │   └── worker.yaml
+    └── translator/
+        ├── agent.json
+        └── worker.yaml
+```
+
+**agent.json**:
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "content-processor"
+  },
+  "subagents": [
+    {
+      "name": "orchestrator",
+      "path": "orchestrator.yaml"
+    },
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/worker.yaml",
+      "type": "skill"
+    },
+    {
+      "name": "translator",
+      "path": "skills/translator/worker.yaml",
+      "type": "skill"
+    }
+  ]
+}
+```
+
+详见：[Skill System 规范](./skill-system.md)
 
 ---
 
-### 8. instructions (v2 兼容)
+### 9. parameters (Skill 专用)
+
+**类型**: `ParameterSchema`  
+**必填**: ❌（Skill 推荐使用）
+
+当 `type: "skill"` 时，定义 Skill 的输入参数 schema。
+
+```typescript
+interface ParameterSchema {
+  [key: string]: {
+    type: "string" | "number" | "boolean" | "array" | "object";
+    required?: boolean;
+    default?: any;
+    enum?: any[];
+    description?: string;
+  };
+}
+```
+
+#### 示例
+
+```json
+{
+  "type": "skill",
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to process"
+    },
+    "max_length": {
+      "type": "number",
+      "default": 200,
+      "description": "Maximum output length"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["bullets", "paragraph"],
+      "default": "bullets",
+      "description": "Output format"
+    }
+  }
+}
+```
+
+Runtime 会在执行 Skill 前验证参数。
+
+---
+
+### 10. instructions (v2 兼容)
 
 **类型**: `string | InstructionsObject`  
 **必填**: ❌（v3 中可选，v2 中必填）
