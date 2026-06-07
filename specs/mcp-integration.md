@@ -8,19 +8,29 @@
 
 ## 概述
 
-MCP (Model Context Protocol) 集成允许 Agent 访问外部工具和服务。Agent Protocol v3 支持三种 MCP 集成方式：
+MCP (Model Context Protocol) 集成让 Agent 能够调用外部工具和服务。在 Agent Protocol v3 中，MCP 配置可以**打包在 Agent 内部**一起发布，用户下载 Agent 时自动获得 MCP 集成能力。
 
-1. **使用平台的 MCP** - Agent 部署到 Claude Code 等平台后，访问平台配置的 MCP servers
-2. **声明 MCP 依赖** - Agent 声明需要的 MCP tools，运行时验证可用性
-3. **作为 MCP Server** - Agent 本身打包为 MCP server，供其他 AI 工具调用
+### 核心理念
+
+✅ **Agent 是完整的包** - MCP 配置随 Agent 一起发布  
+✅ **开箱即用** - 用户只需配置 API Key，无需手动安装 MCP servers  
+✅ **可移植** - Agent 在任何环境都能运行（本地 / 平台）
 
 ---
 
-## 1. 使用平台 MCP (Deploy 模式)
+## 1. Agent 包含 MCP 配置
 
-### 场景
+### Agent 目录结构
 
-Agent 部署到支持 MCP 的平台（如 Claude Code），利用平台已配置的 MCP servers。
+```
+my-agent/
+├── agent.json              # 声明需要的 MCP servers
+├── worker.yaml             # 使用 MCP tools 的 pipeline
+├── mcp/                    # MCP 配置（打包在 Agent 内）
+│   ├── servers.json        # MCP server 配置
+│   └── README.md           # 用户配置说明
+└── README.md
+```
 
 ### agent.json 声明
 
@@ -29,19 +39,34 @@ Agent 部署到支持 MCP 的平台（如 Claude Code），利用平台已配置
   "schema_version": "3.0",
   "identity": {
     "name": "tapd-task-manager",
+    "version": "1.0.0",
     "description": "Manages TAPD tasks using MCP tools"
   },
-  "dependencies": {
-    "mcp_tools": ["tapd"]
+  "entry": {
+    "main_subagent": "worker"
   },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ],
   "mcp": {
+    "config_path": "./mcp/servers.json",
     "required_servers": [
       {
         "name": "tapd",
+        "description": "TAPD project management MCP server",
+        "package": "@openpeng/mcp-tapd",
+        "version": "^1.0.0",
         "tools": [
           "tapd_create_story",
           "tapd_list_stories",
           "tapd_update_story"
+        ],
+        "required_env": [
+          "TAPD_API_KEY",
+          "TAPD_WORKSPACE_ID"
         ],
         "optional": false
       }
@@ -50,24 +75,87 @@ Agent 部署到支持 MCP 的平台（如 Claude Code），利用平台已配置
 }
 ```
 
-### worker.yaml 使用
+**关键字段**:
+- `mcp.config_path` - MCP 配置文件路径（相对于 agent.json）
+- `mcp.required_servers[].package` - NPM 包名（用于自动安装）
+- `mcp.required_servers[].version` - 版本约束
+- `mcp.required_servers[].required_env` - 必需的环境变量（用户需配置）
+
+### mcp/servers.json 配置
+
+```json
+{
+  "servers": {
+    "tapd": {
+      "command": "npx",
+      "args": ["-y", "@openpeng/mcp-tapd@^1.0.0"],
+      "env": {
+        "TAPD_API_KEY": "${TAPD_API_KEY}",
+        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
+      }
+    }
+  }
+}
+```
+
+**环境变量引用**: `${VAR_NAME}` 从用户环境读取
+
+### mcp/README.md 用户说明
+
+```markdown
+# MCP 配置说明
+
+本 Agent 需要以下 MCP servers：
+
+## TAPD Server
+
+**用途**: 创建和管理 TAPD 任务
+
+**配置步骤**:
+
+1. 获取 TAPD API Key:
+   - 登录 TAPD → 个人设置 → API
+   - 生成新的 API Token
+
+2. 设置环境变量:
+   ```bash
+   export TAPD_API_KEY=your_api_key_here
+   export TAPD_WORKSPACE_ID=12345
+   ```
+
+3. 运行 Agent:
+   ```bash
+   agent-deploy run ./tapd-task-manager
+   ```
+
+**首次运行**: MCP server 会自动下载（使用 npx）
+```
+
+---
+
+## 2. worker.yaml 中使用 MCP Tools
+
+### 声明 MCP Tool
 
 ```yaml
 tools:
   - name: llm_chat
     type: builtin
+  
+  # MCP tool 声明
   - name: tapd_create_story
     type: mcp
-    server: tapd
+    server: tapd  # 对应 agent.json 中的 server name
 
 pipeline:
   - step: analyze_requirement
     tool: llm_chat
     args:
-      system_prompt: "You are a BA. Extract story details from user input."
+      system_prompt: "Extract story details from user input."
       prompt: "{{user_input}}"
     output: story_details
 
+  # 使用 MCP tool
   - step: create_story
     tool: tapd_create_story
     args:
@@ -75,128 +163,120 @@ pipeline:
       name: "{{steps.analyze_requirement.output.title}}"
       description: "{{steps.analyze_requirement.output.description}}"
     output: created_story
+    on_fail: abort  # MCP 调用失败 → 终止
 
   - step: report
     tool: llm_chat
     args:
       prompt: |
-        Story created successfully:
-        ID: {{steps.create_story.output.id}}
-        URL: {{steps.create_story.output.url}}
+        Story created:
+        - ID: {{steps.create_story.output.id}}
+        - URL: {{steps.create_story.output.url}}
     output: result
 ```
 
-### 运行时行为
+---
 
-**Deploy 模式** (agent-deploy deploy -t claude_code):
-```markdown
-# /tapd-task-manager
+## 3. 发布和使用流程
 
-You are a TAPD task manager.
+### 发布 Agent (含 MCP 配置)
 
-When the user provides task requirements, follow these steps:
+```bash
+# Agent 作者打包
+cd my-agent/
 
-1. Use llm_chat to analyze and extract story details
-2. Use mcp__tapd__tapd_create_story to create the story
-3. Report the created story ID and URL
+# 目录结构:
+# my-agent/
+# ├── agent.json (声明 MCP servers)
+# ├── worker.yaml
+# ├── mcp/
+# │   ├── servers.json (MCP 配置)
+# │   └── README.md (用户说明)
+# └── README.md
 
-Available MCP tools:
-- mcp__tapd__tapd_create_story
-- mcp__tapd__tapd_list_stories
-- mcp__tapd__tapd_update_story
+# 发布到 Market
+agent-deploy publish .
+
+# 上传内容:
+# ✅ agent.json
+# ✅ worker.yaml
+# ✅ mcp/servers.json (MCP 配置一起打包)
+# ✅ mcp/README.md
 ```
 
-**平台执行**:
-- Claude Code 读取 `.claude/commands/tapd-task-manager.md`
-- 用户调用 `/tapd-task-manager`
-- Claude 可以访问 `mcp__tapd__*` 工具（平台已配置）
-- Agent instructions 引导 Claude 正确使用这些工具
+### 用户下载和使用
+
+```bash
+# 用户下载 Agent
+agent-deploy download tapd-task-manager
+
+# 下载后目录:
+# tapd-task-manager/
+# ├── agent.json
+# ├── worker.yaml
+# ├── mcp/
+# │   ├── servers.json  ← MCP 配置已包含
+# │   └── README.md     ← 配置说明
+# └── README.md
+
+# 1. 查看 MCP 配置要求
+cat tapd-task-manager/mcp/README.md
+
+# 2. 配置环境变量
+export TAPD_API_KEY=your_key
+export TAPD_WORKSPACE_ID=12345
+
+# 3. 运行 Agent (首次会自动安装 MCP server)
+agent-deploy run ./tapd-task-manager \
+  --args user_input="Create a login page"
+
+# 输出:
+# 🔌 Installing MCP server: tapd (@openpeng/mcp-tapd@^1.0.0)
+# ✅ MCP server ready: tapd (3 tools available)
+# 🚀 Running agent: tapd-task-manager
+# ✅ Story created: #67890
+```
 
 ---
 
-## 2. 声明 MCP 依赖 (Run 模式)
+## 4. Runtime 实现
 
-### 场景
-
-Agent 在本地运行（agent-deploy run），需要访问 MCP tools。
-
-### MCP Tool 类型
+### MCP Loader
 
 ```typescript
-// src/runtime/tools/mcp-tool.ts
-export class MCPTool implements BuiltinTool {
-  name: string;  // 例如: "tapd_create_story"
-  type = "mcp";
-  server: string;  // 例如: "tapd"
-  
-  constructor(
-    private mcpClient: MCPClient,
-    private toolDef: MCPToolDefinition
-  ) {
-    this.name = toolDef.name;
-    this.server = toolDef.server;
-  }
-
-  async execute(args: any, context: ExecutionContext): Promise<any> {
-    // 1. 连接到 MCP server
-    const client = await this.mcpClient.connect(this.server);
-    
-    // 2. 调用 MCP tool
-    const result = await client.callTool(this.name, args);
-    
-    return result;
-  }
-}
-```
-
-### MCP Client 配置
-
-**~/.agent-deploy/mcp-config.json**:
-```json
-{
-  "servers": {
-    "tapd": {
-      "command": "npx",
-      "args": ["-y", "@openpeng/mcp-tapd"],
-      "env": {
-        "TAPD_API_KEY": "${TAPD_API_KEY}",
-        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
-      }
-    },
-    "dify": {
-      "command": "node",
-      "args": ["/path/to/dify-mcp-server/dist/index.js"],
-      "env": {
-        "DIFY_API_KEY": "${DIFY_API_KEY}"
-      }
-    }
-  }
-}
-```
-
-### 运行时加载
-
-```typescript
-// src/runtime/mcp-loader.ts
+// src/runtime/mcp/loader.ts
 export class MCPLoader {
-  async loadMCPTools(agent: Agent): Promise<Map<string, MCPTool>> {
+  async loadFromAgent(agent: Agent): Promise<Map<string, MCPTool>> {
     const tools = new Map<string, MCPTool>();
     
-    if (!agent.mcp?.required_servers) {
+    if (!agent.mcp) {
       return tools;
     }
 
+    // 1. 读取 Agent 内置的 MCP 配置
+    const configPath = path.resolve(
+      agent.basePath,
+      agent.mcp.config_path || "./mcp/servers.json"
+    );
+    const mcpConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+    // 2. 验证环境变量
+    this.validateEnvironment(agent.mcp.required_servers);
+
+    // 3. 为每个 server 创建 client
     for (const serverDef of agent.mcp.required_servers) {
-      // 1. 从配置读取 server 信息
-      const serverConfig = this.loadServerConfig(serverDef.name);
-      
-      // 2. 启动 MCP server
-      const client = await this.startMCPServer(serverConfig);
-      
-      // 3. 列举 tools
+      const serverConfig = mcpConfig.servers[serverDef.name];
+      if (!serverConfig) {
+        throw new Error(`MCP server config not found: ${serverDef.name}`);
+      }
+
+      // 4. 启动 MCP server
+      const client = await this.startServer(serverConfig);
+
+      // 5. 列举 tools
       const availableTools = await client.listTools();
-      
-      // 4. 验证所需 tools 是否可用
+
+      // 6. 注册到工具系统
       for (const toolName of serverDef.tools) {
         const toolDef = availableTools.find(t => t.name === toolName);
         if (!toolDef) {
@@ -205,310 +285,95 @@ export class MCPLoader {
           }
           continue;
         }
-        
-        // 5. 注册到工具系统
+
         const mcpTool = new MCPTool(client, toolDef);
         tools.set(toolName, mcpTool);
       }
     }
-    
+
     return tools;
   }
-}
-```
 
-### 使用示例
+  private validateEnvironment(servers: MCPServerDefinition[]) {
+    const missing: string[] = [];
 
-```bash
-# 运行需要 MCP 的 Agent
-agent-deploy run ./tapd-task-manager \
-  --args workspace_id=12345 \
-  --args user_input="Create a login page"
-
-# 输出:
-# 🔌 Connecting to MCP server: tapd
-# ✅ MCP tools loaded: tapd_create_story, tapd_list_stories, tapd_update_story
-# 🚀 Running agent: tapd-task-manager
-# ✅ Story created: #67890
-```
-
----
-
-## 3. Agent 作为 MCP Server
-
-### 场景
-
-将 Agent 打包为 MCP server，供 Claude Desktop、Cursor 等工具调用。
-
-### 打包配置
-
-**agent.json**:
-```json
-{
-  "schema_version": "3.0",
-  "identity": {
-    "name": "code-auditor",
-    "description": "Comprehensive code audit"
-  },
-  "mcp_server": {
-    "enabled": true,
-    "tools": [
-      {
-        "name": "audit_code",
-        "description": "Run comprehensive code audit",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "path": {
-              "type": "string",
-              "description": "Path to code directory"
-            }
-          },
-          "required": ["path"]
+    for (const server of servers) {
+      for (const envVar of server.required_env || []) {
+        if (!process.env[envVar]) {
+          missing.push(`${server.name}: ${envVar}`);
         }
       }
-    ]
-  }
-}
-```
+    }
 
-### MCP Server 包装器
-
-```typescript
-// src/mcp-server/wrapper.ts
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-
-export class AgentMCPServer {
-  private server: Server;
-  
-  constructor(private agent: Agent) {
-    this.server = new Server(
-      {
-        name: agent.identity.name,
-        version: agent.identity.version
-      },
-      { capabilities: { tools: {} } }
-    );
-    
-    this.setupHandlers();
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing required environment variables:\n` +
+        missing.map(m => `  - ${m}`).join("\n") +
+        `\n\nPlease see mcp/README.md for setup instructions.`
+      );
+    }
   }
 
-  private setupHandlers() {
-    // 1. List tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      return {
-        tools: this.agent.mcp_server.tools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema
-        }))
-      };
+  private async startServer(config: MCPServerConfig): Promise<MCPClient> {
+    // 替换环境变量
+    const env = this.resolveEnv(config.env);
+
+    // 启动 MCP server process
+    const client = new MCPClient({
+      command: config.command,
+      args: config.args,
+      env
     });
 
-    // 2. Call tool
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-      
-      // 运行 Agent pipeline
-      const result = await this.agent.run(args);
-      
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2)
-          }
-        ]
-      };
-    });
+    await client.connect();
+    return client;
   }
 
-  async start() {
-    const transport = new StdioServerTransport();
-    await this.server.connect(transport);
-  }
-}
-```
+  private resolveEnv(
+    env: Record<string, string>
+  ): Record<string, string> {
+    const resolved: Record<string, string> = {};
 
-### 生成 MCP Server
-
-```bash
-# 打包 Agent 为 MCP server
-agent-deploy pack ./code-auditor --mcp
-
-# 输出:
-# ✅ Created: code-auditor-mcp/
-#    ├── index.js (MCP server entry)
-#    ├── agent.json
-#    ├── worker.yaml
-#    └── package.json
-
-# 安装
-cd code-auditor-mcp
-npm install
-npm link
-
-# 配置到 Claude Desktop
-# ~/Library/Application Support/Claude/claude_desktop_config.json
-{
-  "mcpServers": {
-    "code-auditor": {
-      "command": "npx",
-      "args": ["code-auditor-mcp"]
+    for (const [key, value] of Object.entries(env)) {
+      // ${VAR_NAME} → process.env.VAR_NAME
+      resolved[key] = value.replace(
+        /\$\{(\w+)\}/g,
+        (_, varName) => process.env[varName] || ""
+      );
     }
+
+    return resolved;
   }
 }
 ```
 
-### 在 Claude Desktop 使用
-
-```
-User: Use code-auditor tool to audit ./my-project
-
-Claude: [调用 MCP tool]
-{
-  "tool": "audit_code",
-  "args": {
-    "path": "./my-project"
-  }
-}
-
-[Agent 运行 pipeline]
-[返回审计报告]
-
-Claude: Here's the audit report:
-- Security: 3 issues found
-- Performance: 5 bottlenecks
-- Quality: 12 code smells
-...
-```
-
----
-
-## 4. MCP Tools 发现与注册
-
-### 自动发现
+### MCP Tool 类型
 
 ```typescript
-// src/runtime/mcp-discovery.ts
-export class MCPDiscovery {
-  async discoverTools(): Promise<MCPServerInfo[]> {
-    const servers: MCPServerInfo[] = [];
-    
-    // 1. 从配置文件读取
-    const config = this.loadMCPConfig();
-    servers.push(...config.servers);
-    
-    // 2. 从环境变量读取
-    // MCP_SERVERS=tapd:npx @openpeng/mcp-tapd,dify:node ./dify-server.js
-    const envServers = this.parseEnvServers();
-    servers.push(...envServers);
-    
-    // 3. 从 Claude Desktop 配置读取（如果存在）
-    const claudeConfig = this.loadClaudeDesktopConfig();
-    if (claudeConfig) {
-      servers.push(...claudeConfig.mcpServers);
-    }
-    
-    return servers;
-  }
-}
-```
-
-### 工具注册
-
-```typescript
-// src/runtime/tools/registry.ts
-export class ToolRegistry {
-  private builtinTools = new Map<string, BuiltinTool>();
-  private mcpTools = new Map<string, MCPTool>();
-
-  async registerMCPTools(agent: Agent) {
-    const mcpLoader = new MCPLoader();
-    const tools = await mcpLoader.loadMCPTools(agent);
-    
-    for (const [name, tool] of tools) {
-      this.mcpTools.set(name, tool);
-    }
-  }
-
-  get(name: string): BuiltinTool | MCPTool | null {
-    // 1. 先查找 builtin
-    if (this.builtinTools.has(name)) {
-      return this.builtinTools.get(name)!;
-    }
-    
-    // 2. 再查找 MCP
-    if (this.mcpTools.has(name)) {
-      return this.mcpTools.get(name)!;
-    }
-    
-    return null;
-  }
-}
-```
-
----
-
-## 5. worker.yaml 中使用 MCP Tools
-
-### 声明方式
-
-```yaml
-tools:
-  - name: llm_chat
-    type: builtin
-  
-  # 方式 1: 声明 MCP tool（需要在 agent.json 中定义 server）
-  - name: tapd_create_story
-    type: mcp
-    server: tapd
-  
-  # 方式 2: 自动加载（从 agent.json 的 mcp.required_servers）
-  - name: dify_workflow
-    type: mcp
-    server: dify
-
-pipeline:
-  - step: create_story
-    tool: tapd_create_story
-    args:
-      workspace_id: "{{workspace_id}}"
-      name: "{{story_name}}"
-    output: story
-    on_fail: abort  # MCP 工具失败 → abort
-
-  - step: run_workflow
-    tool: dify_workflow
-    args:
-      workflow_id: "12345"
-      inputs:
-        data: "{{steps.create_story.output}}"
-    output: workflow_result
-    on_fail: retry(2)  # MCP 工具可以重试
-```
-
-### 错误处理
-
-```typescript
-// MCP 工具特殊错误处理
+// src/runtime/tools/mcp-tool.ts
 export class MCPTool implements BuiltinTool {
+  name: string;
+  type = "mcp";
+  server: string;
+  
+  constructor(
+    private client: MCPClient,
+    private toolDef: MCPToolDefinition
+  ) {
+    this.name = toolDef.name;
+    this.server = toolDef.server;
+  }
+
   async execute(args: any, context: ExecutionContext): Promise<any> {
     try {
-      const result = await this.mcpClient.callTool(this.name, args);
+      const result = await this.client.callTool(this.name, args);
       return result;
     } catch (error) {
       if (error instanceof MCPConnectionError) {
         throw new ToolError(
           `MCP server '${this.server}' not available. ` +
-          `Make sure it's configured in ~/.agent-deploy/mcp-config.json`,
+          `Check that required environment variables are set.`,
           "MCP_SERVER_UNAVAILABLE"
-        );
-      } else if (error instanceof MCPToolNotFoundError) {
-        throw new ToolError(
-          `MCP tool '${this.name}' not found on server '${this.server}'.`,
-          "MCP_TOOL_NOT_FOUND"
         );
       }
       throw error;
@@ -519,7 +384,56 @@ export class MCPTool implements BuiltinTool {
 
 ---
 
-## 6. 示例：完整 MCP 集成
+## 5. Deploy 模式（部署到平台）
+
+### 场景
+
+Agent 部署到支持 MCP 的平台（如 Claude Code），利用平台配置的 MCP servers。
+
+### Deploy 行为
+
+```bash
+agent-deploy deploy ./tapd-task-manager -t claude_code
+```
+
+**生成的 `.claude/commands/tapd-task-manager.md`**:
+
+```markdown
+# /tapd-task-manager
+
+You are a TAPD task manager.
+
+## Required MCP Servers
+
+This agent requires the following MCP servers to be configured in your Claude Code settings:
+
+- **tapd** (@openpeng/mcp-tapd)
+  - Tools: tapd_create_story, tapd_list_stories, tapd_update_story
+  - Env: TAPD_API_KEY, TAPD_WORKSPACE_ID
+
+## Workflow
+
+When the user provides task requirements:
+
+1. Use llm_chat to analyze and extract story details
+2. Use mcp__tapd__tapd_create_story to create the story
+3. Report the created story ID and URL
+
+## Available MCP Tools
+
+- mcp__tapd__tapd_create_story
+- mcp__tapd__tapd_list_stories
+- mcp__tapd__tapd_update_story
+```
+
+**用户体验**:
+1. Agent 部署后，Claude Code 提示用户需要配置 MCP servers
+2. 用户在 Claude Code 设置中添加 TAPD MCP server
+3. 配置环境变量后，Agent 可使用 MCP tools
+
+---
+
+## 6. 完整示例
 
 ### Agent: TAPD Task Manager
 
@@ -530,8 +444,10 @@ export class MCPTool implements BuiltinTool {
   "identity": {
     "name": "tapd-task-manager",
     "version": "1.0.0",
-    "description": "Manages TAPD tasks with AI assistance",
-    "author": "Agent Protocol Team"
+    "display_name": "TAPD Task Manager",
+    "description": "AI-powered TAPD task management",
+    "author": "Agent Protocol Team",
+    "tags": ["tapd", "project-management", "mcp"]
   },
   "entry": {
     "main_subagent": "worker"
@@ -543,22 +459,44 @@ export class MCPTool implements BuiltinTool {
     }
   ],
   "dependencies": {
-    "llm_provider": "anthropic",
-    "mcp_tools": ["tapd"]
+    "llm_provider": "anthropic"
   },
   "mcp": {
+    "config_path": "./mcp/servers.json",
     "required_servers": [
       {
         "name": "tapd",
+        "description": "TAPD project management tools",
+        "package": "@openpeng/mcp-tapd",
+        "version": "^1.0.0",
         "tools": [
           "tapd_create_story",
           "tapd_list_stories",
-          "tapd_update_story",
-          "tapd_get_story"
+          "tapd_update_story"
+        ],
+        "required_env": [
+          "TAPD_API_KEY",
+          "TAPD_WORKSPACE_ID"
         ],
         "optional": false
       }
     ]
+  }
+}
+```
+
+**mcp/servers.json**:
+```json
+{
+  "servers": {
+    "tapd": {
+      "command": "npx",
+      "args": ["-y", "@openpeng/mcp-tapd@^1.0.0"],
+      "env": {
+        "TAPD_API_KEY": "${TAPD_API_KEY}",
+        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
+      }
+    }
   }
 }
 ```
@@ -580,14 +518,14 @@ shared_context:
 
 pipeline:
   # Step 1: 分析用户输入
-  - step: analyze_input
+  - step: analyze
     tool: llm_chat
     args:
       system_prompt: |
         You are a Business Analyst.
-        Extract story details from user requirements.
+        Extract story details from user input.
         Return JSON: {
-          "action": "create" | "list" | "update",
+          "action": "create" | "list",
           "story_name": "...",
           "description": "..."
         }
@@ -595,14 +533,14 @@ pipeline:
       temperature: 0.3
     output: analysis
 
-  # Step 2: 列出现有 stories（如果需要）
-  - step: list_existing
+  # Step 2: 列出现有 stories
+  - step: list_stories
     tool: tapd_list_stories
     args:
       workspace_id: "{{shared_context.workspace_id}}"
       status: "planning"
     output: existing_stories
-    when: "{{steps.analyze_input.output.action}} == 'list'"
+    when: "{{steps.analyze.output.action}} == 'list'"
     on_fail: skip
 
   # Step 3: 创建新 story
@@ -610,19 +548,18 @@ pipeline:
     tool: tapd_create_story
     args:
       workspace_id: "{{shared_context.workspace_id}}"
-      name: "{{steps.analyze_input.output.story_name}}"
-      description: "{{steps.analyze_input.output.description}}"
+      name: "{{steps.analyze.output.story_name}}"
+      description: "{{steps.analyze.output.description}}"
     output: created_story
-    when: "{{steps.analyze_input.output.action}} == 'create'"
+    when: "{{steps.analyze.output.action}} == 'create'"
     on_fail: abort
 
   # Step 4: 生成报告
-  - step: generate_report
+  - step: report
     tool: llm_chat
     args:
       prompt: |
-        Generate a user-friendly report based on:
-        Action: {{steps.analyze_input.output.action}}
+        Generate user-friendly report:
         
         {% if steps.create_story.output %}
         Created story:
@@ -631,178 +568,157 @@ pipeline:
         - URL: {{steps.create_story.output.url}}
         {% endif %}
         
-        {% if steps.list_existing.output %}
-        Found {{steps.list_existing.output.length}} stories.
+        {% if steps.list_stories.output %}
+        Found {{steps.list_stories.output.length}} stories.
         {% endif %}
-    output: report
+    output: result
 ```
 
-### 使用
+### 使用流程
 
-**本地运行**:
+**发布 Agent**:
 ```bash
-# 配置 MCP
-cat > ~/.agent-deploy/mcp-config.json << 'EOF'
+cd tapd-task-manager/
+agent-deploy publish .
+
+# 上传内容包括:
+# - agent.json (含 MCP 声明)
+# - worker.yaml
+# - mcp/servers.json (MCP 配置)
+# - mcp/README.md (用户说明)
+```
+
+**用户使用**:
+```bash
+# 1. 下载
+agent-deploy download tapd-task-manager
+
+# 2. 查看配置说明
+cat tapd-task-manager/mcp/README.md
+
+# 3. 配置环境变量
+export TAPD_API_KEY=your_api_key
+export TAPD_WORKSPACE_ID=12345
+
+# 4. 运行
+agent-deploy run ./tapd-task-manager \
+  --args workspace_id=12345 \
+  --args user_input="Create a login page with OAuth"
+
+# 输出:
+# 🔌 Loading MCP configuration from agent...
+# 📦 Installing MCP server: tapd (@openpeng/mcp-tapd@^1.0.0)...
+# ✅ MCP server ready: tapd (3 tools available)
+# 🚀 Running agent: tapd-task-manager
+# 
+# [分析用户输入...]
+# [调用 tapd_create_story...]
+# 
+# ✅ Story created successfully!
+# - ID: #67890
+# - Name: 用户登录页面 with OAuth
+# - URL: https://tapd.cn/12345/stories/view/67890
+```
+
+---
+
+## 7. 最佳实践
+
+### ✅ DO - 推荐做法
+
+**1. MCP 配置打包在 Agent 内**:
+```
+my-agent/
+├── agent.json
+├── mcp/
+│   ├── servers.json  ← 打包 MCP 配置
+│   └── README.md     ← 用户说明
+```
+
+**2. 使用 NPM 包安装 MCP servers**:
+```json
 {
   "servers": {
     "tapd": {
       "command": "npx",
-      "args": ["-y", "@openpeng/mcp-tapd"],
-      "env": {
-        "TAPD_API_KEY": "${TAPD_API_KEY}",
-        "TAPD_WORKSPACE_ID": "12345"
-      }
+      "args": ["-y", "@openpeng/mcp-tapd@^1.0.0"]  // ✅ 自动安装
     }
   }
 }
-EOF
-
-# 运行 Agent
-agent-deploy run ./tapd-task-manager \
-  --args workspace_id=12345 \
-  --args user_input="Create a user login page with OAuth support"
-
-# 输出:
-# 🔌 Loading MCP servers...
-# ✅ Connected to MCP server: tapd (4 tools available)
-# 🚀 Running agent: tapd-task-manager
-# 📝 Creating story: User login page with OAuth
-# ✅ Story created: #67890
-# 🔗 URL: https://tapd.cn/12345/stories/view/67890
 ```
 
-**部署到 Claude Code**:
-```bash
-agent-deploy deploy ./tapd-task-manager -t claude_code
+**3. 清晰的环境变量说明**:
+```markdown
+# mcp/README.md
 
-# 在 Claude Code 中使用:
-# /tapd-task-manager workspace_id=12345 "Create a dashboard page"
+## 必需环境变量
+
+- `TAPD_API_KEY`: TAPD API Token
+  - 获取方式: TAPD → 个人设置 → API
+- `TAPD_WORKSPACE_ID`: 工作空间 ID
+  - 获取方式: 从 TAPD URL 复制
 ```
 
----
-
-## 7. MCP 配置管理
-
-### 配置文件位置
-
-```
-~/.agent-deploy/
-├── mcp-config.json          # 用户级 MCP 配置
-└── cache/
-    └── mcp-tools.json       # 缓存的 MCP tools 列表
-```
-
-### 配置格式
-
-```json
-{
-  "servers": {
-    "<server_name>": {
-      "command": "string",       // 启动命令
-      "args": ["string"],        // 命令参数
-      "env": {                   // 环境变量
-        "KEY": "value"
-      },
-      "timeout": 30000,          // 启动超时（ms）
-      "retry": 3                 // 连接失败重试次数
-    }
-  },
-  "cache": {
-    "enabled": true,             // 启用工具列表缓存
-    "ttl": 3600                  // 缓存 TTL（秒）
-  }
-}
-```
-
-### CLI 管理命令
-
-```bash
-# 列出可用 MCP servers
-agent-deploy mcp list
-
-# 测试 MCP server 连接
-agent-deploy mcp test tapd
-
-# 列出 server 的 tools
-agent-deploy mcp tools tapd
-
-# 清除缓存
-agent-deploy mcp cache-clear
-```
-
----
-
-## 8. 最佳实践
-
-### ✅ DO - 推荐做法
-
-**1. 显式声明依赖**:
-```json
-{
-  "dependencies": {
-    "mcp_tools": ["tapd", "dify"]
-  },
-  "mcp": {
-    "required_servers": [...]
-  }
-}
-```
-
-**2. 优雅降级**:
+**4. 优雅的错误处理**:
 ```yaml
-- step: try_mcp_tool
+- step: create_story
   tool: tapd_create_story
   args: {...}
-  on_fail: continue  # MCP 不可用时继续
-
-- step: fallback
-  tool: llm_chat
-  args:
-    prompt: "MCP tool unavailable. Please create story manually..."
-  when: "{{steps.try_mcp_tool.success}} == false"
-```
-
-**3. 错误提示**:
-```typescript
-if (!mcpServerAvailable) {
-  throw new Error(
-    `MCP server 'tapd' not configured. ` +
-    `Please run: agent-deploy mcp config tapd`
-  );
-}
+  on_fail: abort  # ✅ MCP 失败 → 明确终止
 ```
 
 ### ❌ DON'T - 避免做法
 
-**1. 硬编码 MCP server 路径**:
-```yaml
-# ❌ Bad
-tools:
-  - name: tapd_tool
-    type: custom
-    config:
-      script: "/usr/local/bin/tapd-mcp-server"  # 硬编码路径
+**1. 不要依赖全局 MCP 配置**:
+```json
+// ❌ Bad - 依赖用户全局配置
+{
+  "mcp": {
+    "use_global_config": true  // 用户可能没配置
+  }
+}
 
-# ✅ Good
-tools:
-  - name: tapd_create_story
-    type: mcp
-    server: tapd  # 从配置读取
+// ✅ Good - Agent 自带配置
+{
+  "mcp": {
+    "config_path": "./mcp/servers.json"
+  }
+}
 ```
 
-**2. 忽略 MCP 不可用的情况**:
+**2. 不要硬编码 API Key**:
+```json
+// ❌ Bad - 硬编码
+{
+  "env": {
+    "TAPD_API_KEY": "real_api_key_here"  // 安全风险
+  }
+}
+
+// ✅ Good - 环境变量
+{
+  "env": {
+    "TAPD_API_KEY": "${TAPD_API_KEY}"  // 从用户环境读取
+  }
+}
+```
+
+**3. 不要假设 MCP server 已安装**:
 ```yaml
 # ❌ Bad - 没有 fallback
 - step: must_use_mcp
   tool: tapd_create_story
-  on_fail: abort  # MCP 不可用 → 整个 Agent 失败
+  on_fail: abort
 
-# ✅ Good - 有 fallback
+# ✅ Good - 提供 fallback 或清晰的错误提示
 - step: try_mcp
   tool: tapd_create_story
-  on_fail: continue
+  on_fail: skip
 
-- step: manual_fallback
+- step: manual_instruction
+  tool: llm_chat
+  args:
+    prompt: "MCP tool unavailable. Please manually create story..."
   when: "{{steps.try_mcp.success}} == false"
 ```
 
@@ -813,8 +729,7 @@ tools:
 - [MCP Protocol Specification](https://modelcontextprotocol.io/)
 - [agent.json v3 规范](./agent-json-v3.md)
 - [worker.yaml 规范](./worker-yaml.md)
-- [Builtin Tools 规范](./builtin-tools.md)
 
 ---
 
-**MCP Integration - 让 Agent 访问外部工具和服务** 🔌
+**MCP Integration - Agent 自带 MCP 配置，开箱即用** 🔌

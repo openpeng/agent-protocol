@@ -8,12 +8,13 @@
 
 ## 概述
 
-Skill System 让 Agent 能够调用和组合预定义的技能（Skills）。在 Agent Protocol v3 中，Skill 是一种特殊的 Agent 类型，具有以下特点：
+Skill System 让 Agent 能够包含和调用可复用的技能（Skills）。在 Agent Protocol v3 中，**Skills 作为 Agent 的一部分打包发布**，而不是从独立的 Skill 市场下载。
 
-- ✅ **单一职责** - 一个 Skill 只做一件事
-- ✅ **可复用** - 可被多个 Agent 调用
-- ✅ **参数化** - 通过参数配置行为
-- ✅ **可组合** - 多个 Skills 组合成复杂功能
+### 核心理念
+
+✅ **Skills 打包在 Agent 内** - 作为 subagents 一起发布  
+✅ **自包含** - Agent 包含所有需要的 Skills，无需额外下载  
+✅ **可复用** - 多个 subagents 可以使用相同的 Skill
 
 ---
 
@@ -25,10 +26,13 @@ Skill System 让 Agent 能够调用和组合预定义的技能（Skills）。在
 |------|-------|-------|
 | **复杂度** | 简单，单一功能 | 复杂，多步骤工作流 |
 | **Pipeline** | 1-3 步 | 多步骤，有条件分支 |
-| **用途** | 被其他 Agent 调用 | 独立运行或调用 Skills |
-| **示例** | "总结文本"、"翻译" | "代码审查"、"项目管理" |
+| **用途** | 被其他 subagents 调用 | 独立发布或包含 Skills |
+| **发布方式** | 作为 Agent 的一部分 | 独立发布到 Market |
+| **示例** | "总结文本"、"翻译" | "内容处理器"（含多个 Skills） |
 
-### Skill 示例
+### Skill 标记
+
+在 agent.json 中使用 `"type": "skill"` 标记：
 
 ```json
 {
@@ -51,51 +55,41 @@ Skill System 让 Agent 能够调用和组合预定义的技能（Skills）。在
 }
 ```
 
-```yaml
-# worker.yaml
-tools:
-  - name: llm_chat
-    type: builtin
-
-pipeline:
-  - step: summarize
-    tool: llm_chat
-    args:
-      system_prompt: "Summarize text into 3-5 bullet points."
-      prompt: "{{text}}"
-      max_tokens: 200
-    output: summary
-```
-
 ---
 
-## 2. 在 Agent 中使用 Skills
+## 2. Agent 包含 Skills
 
-### 方式 1: 作为 Subagent
+### Agent 目录结构
 
-将 Skill 作为 Subagent 加载。
-
-**Agent 结构**:
 ```
-my-agent/
-├── agent.json
-├── orchestrator.yaml      # 主工作流
-└── skills/
-    ├── text-summarizer/   # Skill 1
-    │   ├── agent.json
-    │   └── worker.yaml
-    └── translator/        # Skill 2
-        ├── agent.json
-        └── worker.yaml
+content-processor/              # 主 Agent
+├── agent.json                  # 声明包含的 Skills
+├── orchestrator.yaml           # 主工作流
+├── skills/                     # Skills 目录
+│   ├── text-summarizer/        # Skill 1
+│   │   ├── agent.json          # type: "skill"
+│   │   └── worker.yaml
+│   ├── translator/             # Skill 2
+│   │   ├── agent.json
+│   │   └── worker.yaml
+│   └── markdown-formatter/     # Skill 3
+│       ├── agent.json
+│       └── worker.yaml
+└── README.md
 ```
 
-**agent.json**:
+### agent.json 声明
+
 ```json
 {
   "schema_version": "3.0",
   "identity": {
     "name": "content-processor",
-    "description": "Processes content with summarization and translation"
+    "version": "1.0.0",
+    "display_name": "Content Processor",
+    "description": "Process content with summarization, translation, and formatting",
+    "author": "Your Name",
+    "tags": ["content", "nlp", "processing"]
   },
   "entry": {
     "main_subagent": "orchestrator"
@@ -103,259 +97,107 @@ my-agent/
   "subagents": [
     {
       "name": "orchestrator",
-      "path": "orchestrator.yaml"
+      "path": "orchestrator.yaml",
+      "description": "Main workflow coordinator"
     },
     {
       "name": "text-summarizer",
       "path": "skills/text-summarizer/worker.yaml",
-      "description": "Summarizes text"
+      "description": "Summarizes text",
+      "type": "skill"  // ← 标记为 skill
     },
     {
       "name": "translator",
       "path": "skills/translator/worker.yaml",
-      "description": "Translates text"
+      "description": "Translates text",
+      "type": "skill"
+    },
+    {
+      "name": "markdown-formatter",
+      "path": "skills/markdown-formatter/worker.yaml",
+      "description": "Formats markdown",
+      "type": "skill"
     }
   ]
 }
 ```
 
-**orchestrator.yaml**:
+### orchestrator.yaml 使用 Skills
+
 ```yaml
 tools:
   - name: read_file
     type: builtin
-  - name: skill_text_summarizer
+  - name: write_file
+    type: builtin
+  
+  # Skill 作为 subagent tool
+  - name: summarize
     type: subagent
     subagent: text-summarizer
-  - name: skill_translator
+  
+  - name: translate
     type: subagent
     subagent: translator
+  
+  - name: format_markdown
+    type: subagent
+    subagent: markdown-formatter
 
 pipeline:
+  # Step 1: 读取文件
   - step: read_content
     tool: read_file
     args:
       path: "{{file_path}}"
-    output: content
+    output: raw_content
 
-  # 调用 Skill 1: 总结
-  - step: summarize
-    tool: skill_text_summarizer
+  # Step 2: 调用 Skill - 总结
+  - step: summarize_content
+    tool: summarize
     args:
       text: "{{steps.read_content.output}}"
-    output: summary
-
-  # 调用 Skill 2: 翻译
-  - step: translate
-    tool: skill_translator
-    args:
-      text: "{{steps.summarize.output}}"
-      target_lang: "{{target_lang}}"
-    output: translated
-
-  - step: result
-    tool: bash
-    args:
-      command: "echo '{{steps.translated.output}}'"
-    output: final_result
-```
-
-### 方式 2: 通过 Skill Registry
-
-从 Skill Registry 动态加载 Skills。
-
-**Skill Registry 配置** (~/.agent-deploy/skills.json):
-```json
-{
-  "skills": [
-    {
-      "name": "text-summarizer",
-      "path": "/usr/local/share/agent-skills/text-summarizer",
-      "version": "1.0.0"
-    },
-    {
-      "name": "translator",
-      "path": "/usr/local/share/agent-skills/translator",
-      "version": "2.1.0"
-    }
-  ]
-}
-```
-
-**worker.yaml**:
-```yaml
-tools:
-  - name: text_summarizer
-    type: skill
-    skill_name: text-summarizer  # 从 registry 加载
-
-pipeline:
-  - step: summarize
-    tool: text_summarizer
-    args:
-      text: "{{content}}"
-    output: summary
-```
-
-**运行时行为**:
-```typescript
-// src/runtime/skills/loader.ts
-export class SkillLoader {
-  async loadSkill(skillName: string): Promise<Agent> {
-    // 1. 从 registry 查找
-    const skillInfo = this.registry.find(skillName);
-    if (!skillInfo) {
-      throw new Error(`Skill not found: ${skillName}`);
-    }
-
-    // 2. 加载 Skill Agent
-    const skillAgent = await this.agentLoader.load(skillInfo.path);
-
-    // 3. 验证是 Skill 类型
-    if (skillAgent.type !== "skill") {
-      throw new Error(`Not a skill: ${skillName}`);
-    }
-
-    return skillAgent;
-  }
-
-  async executeSkill(
-    skillAgent: Agent,
-    args: Record<string, any>
-  ): Promise<any> {
-    // 执行 Skill 的 pipeline
-    return await skillAgent.run(args);
-  }
-}
-```
-
----
-
-## 3. Skill Tool 实现
-
-### SkillTool 类
-
-```typescript
-// src/runtime/tools/skill-tool.ts
-export class SkillTool implements BuiltinTool {
-  name: string;
-  type = "skill";
-  
-  constructor(
-    private skillName: string,
-    private skillLoader: SkillLoader
-  ) {
-    this.name = `skill_${skillName}`;
-  }
-
-  async execute(args: any, context: ExecutionContext): Promise<any> {
-    // 1. 加载 Skill
-    const skillAgent = await this.skillLoader.loadSkill(this.skillName);
-
-    // 2. 创建 Skill 执行上下文
-    const skillContext = {
-      ...context,
-      initialArgs: args,
-      steps: new Map()  // 隔离的步骤上下文
-    };
-
-    // 3. 执行 Skill pipeline
-    const result = await skillAgent.run(args);
-
-    return result;
-  }
-}
-```
-
-### 在 Pipeline 中使用
-
-```yaml
-tools:
-  - name: text_summarizer
-    type: skill
-    skill_name: text-summarizer
-
-pipeline:
-  - step: summarize
-    tool: text_summarizer
-    args:
-      text: "{{content}}"
       max_length: 200
     output: summary
-    on_fail: abort
+
+  # Step 3: 调用 Skill - 翻译
+  - step: translate_summary
+    tool: translate
+    args:
+      text: "{{steps.summarize_content.output}}"
+      target_lang: "{{target_lang}}"
+    output: translated
+    when: "{{target_lang}} != ''"
+
+  # Step 4: 调用 Skill - 格式化
+  - step: format_output
+    tool: format_markdown
+    args:
+      text: "{{steps.translate_summary.output}}"
+    output: formatted
+
+  # Step 5: 写入文件
+  - step: write_result
+    tool: write_file
+    args:
+      path: "{{output_path}}"
+      content: "{{steps.format_output.output}}"
 ```
 
 ---
 
-## 4. Skill 市场集成
+## 3. Skill 定义
 
-### 从 Market 安装 Skills
+### Skill: text-summarizer
 
-```bash
-# 搜索 Skills
-agent-deploy search --type skill summarizer
-
-# 输出:
-# text-summarizer (v1.0.0) - Summarizes text into bullet points
-# ai-summarizer (v2.3.0) - Advanced AI-powered summarization
-
-# 安装 Skill
-agent-deploy install text-summarizer
-
-# 安装到:
-# ~/.agent-deploy/skills/text-summarizer/
-```
-
-### Skill 注册
-
-```typescript
-// src/runtime/skills/registry.ts
-export class SkillRegistry {
-  private skills = new Map<string, SkillInfo>();
-
-  async discover() {
-    // 1. 扫描系统 Skill 目录
-    const systemSkills = await this.scanDirectory(
-      "/usr/local/share/agent-skills"
-    );
-
-    // 2. 扫描用户 Skill 目录
-    const userSkills = await this.scanDirectory(
-      "~/.agent-deploy/skills"
-    );
-
-    // 3. 注册所有 Skills
-    for (const skill of [...systemSkills, ...userSkills]) {
-      this.register(skill);
-    }
-  }
-
-  register(skillInfo: SkillInfo) {
-    this.skills.set(skillInfo.name, skillInfo);
-  }
-
-  find(name: string): SkillInfo | null {
-    return this.skills.get(name) || null;
-  }
-
-  list(): SkillInfo[] {
-    return Array.from(this.skills.values());
-  }
-}
-```
-
----
-
-## 5. Skill 参数验证
-
-### 定义参数 Schema
-
-**agent.json**:
+**skills/text-summarizer/agent.json**:
 ```json
 {
   "schema_version": "3.0",
   "identity": {
-    "name": "text-summarizer"
+    "name": "text-summarizer",
+    "version": "1.0.0",
+    "description": "Summarizes text into concise bullet points"
   },
   "type": "skill",
   "parameters": {
@@ -375,11 +217,267 @@ export class SkillRegistry {
       "default": "bullets",
       "description": "Output format"
     }
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ]
+}
+```
+
+**skills/text-summarizer/worker.yaml**:
+```yaml
+tools:
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: summarize
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a professional summarizer.
+        Summarize text into {{format}} format.
+        Keep it under {{max_length}} characters.
+      prompt: "{{text}}"
+      temperature: 0.3
+      max_tokens: 500
+    output: summary
+```
+
+### Skill: translator
+
+**skills/translator/agent.json**:
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "translator",
+    "version": "1.0.0",
+    "description": "Translates text between languages"
+  },
+  "type": "skill",
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to translate"
+    },
+    "target_lang": {
+      "type": "string",
+      "required": true,
+      "enum": ["en", "zh", "es", "fr", "de", "ja"],
+      "description": "Target language"
+    },
+    "source_lang": {
+      "type": "string",
+      "default": "auto",
+      "description": "Source language (auto-detect if not specified)"
+    }
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ]
+}
+```
+
+**skills/translator/worker.yaml**:
+```yaml
+tools:
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: translate
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a professional translator.
+        Translate accurately and naturally.
+      prompt: |
+        Translate from {{source_lang}} to {{target_lang}}:
+        
+        {{text}}
+        
+        Only return the translation, no explanations.
+      temperature: 0.3
+    output: translation
+```
+
+---
+
+## 4. 发布和使用流程
+
+### 发布 Agent (含 Skills)
+
+```bash
+cd content-processor/
+
+# 目录结构:
+# content-processor/
+# ├── agent.json (声明 Skills)
+# ├── orchestrator.yaml
+# ├── skills/
+# │   ├── text-summarizer/  ← Skill 1
+# │   ├── translator/       ← Skill 2
+# │   └── markdown-formatter/  ← Skill 3
+# └── README.md
+
+# 发布到 Market
+agent-deploy publish .
+
+# 上传内容:
+# ✅ agent.json
+# ✅ orchestrator.yaml
+# ✅ skills/ 目录（所有 Skills 一起打包）
+```
+
+### 用户下载和使用
+
+```bash
+# 下载 Agent
+agent-deploy download content-processor
+
+# 下载后目录:
+# content-processor/
+# ├── agent.json
+# ├── orchestrator.yaml
+# ├── skills/
+# │   ├── text-summarizer/  ← Skills 已包含
+# │   ├── translator/
+# │   └── markdown-formatter/
+# └── README.md
+
+# 运行 Agent (Skills 自动可用)
+agent-deploy run ./content-processor \
+  --args file_path=/data/report.txt \
+  --args output_path=/tmp/summary.md \
+  --args target_lang=zh
+
+# 输出:
+# 🚀 Running agent: content-processor
+# 📂 Loading skills: text-summarizer, translator, markdown-formatter
+# ✅ Skills loaded: 3
+# 
+# [读取文件...]
+# [调用 Skill: text-summarizer...]
+# [调用 Skill: translator...]
+# [调用 Skill: markdown-formatter...]
+# 
+# ✅ Result written to: /tmp/summary.md
+```
+
+---
+
+## 5. Runtime 实现
+
+### Skill Loader
+
+```typescript
+// src/runtime/skills/loader.ts
+export class SkillLoader {
+  async loadSkillsFromAgent(agent: Agent): Promise<Map<string, Agent>> {
+    const skills = new Map<string, Agent>();
+
+    // 遍历 subagents，找到 type: "skill" 的
+    for (const subagentDef of agent.subagents) {
+      if (subagentDef.type !== "skill") {
+        continue;
+      }
+
+      // 加载 Skill 的 agent.json
+      const skillPath = path.resolve(
+        agent.basePath,
+        path.dirname(subagentDef.path),
+        "agent.json"
+      );
+
+      const skillAgent = await this.loadAgent(skillPath);
+
+      // 验证是 Skill 类型
+      if (skillAgent.type !== "skill") {
+        console.warn(`Subagent ${subagentDef.name} declared as skill but type is not "skill"`);
+      }
+
+      skills.set(subagentDef.name, skillAgent);
+    }
+
+    return skills;
   }
 }
 ```
 
-### 运行时验证
+### Subagent Tool (用于调用 Skill)
+
+```typescript
+// src/runtime/tools/subagent-tool.ts
+export class SubagentTool implements BuiltinTool {
+  name: string;
+  type = "subagent";
+  
+  constructor(
+    private subagentName: string,
+    private subagentAgent: Agent
+  ) {
+    this.name = `subagent_${subagentName}`;
+  }
+
+  async execute(args: any, context: ExecutionContext): Promise<any> {
+    // 1. 验证参数 (如果是 Skill)
+    if (this.subagentAgent.type === "skill") {
+      this.validateParameters(args, this.subagentAgent.parameters);
+    }
+
+    // 2. 创建隔离的执行上下文
+    const subagentContext = {
+      ...context,
+      initialArgs: args,
+      steps: new Map(),  // 隔离步骤上下文
+      agent: this.subagentAgent
+    };
+
+    // 3. 执行 subagent pipeline
+    const engine = new PipelineEngine(context.toolRegistry, context.logger);
+    const entryYaml = this.subagentAgent.subagents.get(
+      this.subagentAgent.entry.main_subagent
+    );
+    
+    const result = await engine.execute(entryYaml, subagentContext);
+
+    return result;
+  }
+
+  private validateParameters(
+    args: Record<string, any>,
+    parameters: ParameterSchema
+  ) {
+    if (!parameters) return;
+
+    const validator = new SkillParameterValidator();
+    const result = validator.validate(args, parameters);
+    
+    if (!result.valid) {
+      throw new Error(
+        `Invalid parameters for skill ${this.subagentName}: ` +
+        result.errors.join(", ")
+      );
+    }
+  }
+}
+```
+
+### Parameter Validator
 
 ```typescript
 // src/runtime/skills/validator.ts
@@ -401,7 +499,7 @@ export class SkillParameterValidator {
     for (const [key, value] of Object.entries(args)) {
       const schema = parameters[key];
       if (!schema) {
-        errors.push(`Unknown parameter: ${key}`);
+        // 允许额外参数
         continue;
       }
 
@@ -424,106 +522,39 @@ export class SkillParameterValidator {
       errors
     };
   }
+
+  private checkType(value: any, expectedType: string): boolean {
+    switch (expectedType) {
+      case "string": return typeof value === "string";
+      case "number": return typeof value === "number";
+      case "boolean": return typeof value === "boolean";
+      case "array": return Array.isArray(value);
+      case "object": return typeof value === "object" && !Array.isArray(value);
+      default: return true;
+    }
+  }
 }
 ```
 
 ---
 
-## 6. 内置 Skills
+## 6. Skill 组合模式
 
-### 推荐的内置 Skills
-
-| Skill | 功能 | 参数 |
-|-------|------|------|
-| `text-summarizer` | 文本摘要 | text, max_length |
-| `translator` | 文本翻译 | text, target_lang |
-| `json-parser` | JSON 解析 | json_string |
-| `markdown-formatter` | Markdown 格式化 | text |
-| `code-formatter` | 代码格式化 | code, language |
-| `url-extractor` | 提取 URL | text |
-| `date-parser` | 日期解析 | date_string |
-
-### 示例：translator Skill
-
-**agent.json**:
-```json
-{
-  "schema_version": "3.0",
-  "identity": {
-    "name": "translator",
-    "version": "1.0.0",
-    "description": "Translates text between languages"
-  },
-  "type": "skill",
-  "parameters": {
-    "text": {
-      "type": "string",
-      "required": true
-    },
-    "target_lang": {
-      "type": "string",
-      "required": true,
-      "enum": ["en", "zh", "es", "fr", "de", "ja"]
-    },
-    "source_lang": {
-      "type": "string",
-      "default": "auto"
-    }
-  },
-  "entry": {
-    "main_subagent": "worker"
-  },
-  "subagents": [
-    {
-      "name": "worker",
-      "path": "worker.yaml"
-    }
-  ]
-}
-```
-
-**worker.yaml**:
-```yaml
-tools:
-  - name: llm_chat
-    type: builtin
-
-pipeline:
-  - step: translate
-    tool: llm_chat
-    args:
-      system_prompt: |
-        You are a professional translator.
-        Translate accurately and naturally.
-      prompt: |
-        Translate the following text from {{source_lang}} to {{target_lang}}:
-        
-        {{text}}
-        
-        Only return the translated text, no explanations.
-      temperature: 0.3
-    output: translation
-```
-
----
-
-## 7. Skill 组合模式
-
-### 模式 1: 串行组合
+### 模式 1: 串行调用
 
 ```yaml
-# Agent: content-pipeline
+# orchestrator.yaml
 pipeline:
   # Skill 1: 总结
   - step: summarize
-    tool: skill_text_summarizer
+    tool: summarize
     args:
       text: "{{content}}"
     output: summary
 
   # Skill 2: 翻译（使用 Skill 1 的输出）
   - step: translate
-    tool: skill_translator
+    tool: translate
     args:
       text: "{{steps.summarize.output}}"
       target_lang: "zh"
@@ -531,85 +562,228 @@ pipeline:
 
   # Skill 3: 格式化（使用 Skill 2 的输出）
   - step: format
-    tool: skill_markdown_formatter
+    tool: format_markdown
     args:
       text: "{{steps.translate.output}}"
     output: formatted
 ```
 
-### 模式 2: 并行组合（未来）
-
-```yaml
-# v3.1+ 支持
-pipeline:
-  - parallel:
-      # Skill 1: 总结
-      - step: summarize
-        tool: skill_text_summarizer
-        args:
-          text: "{{content}}"
-      
-      # Skill 2: 提取关键词
-      - step: extract_keywords
-        tool: skill_keyword_extractor
-        args:
-          text: "{{content}}"
-      
-      # Skill 3: 情感分析
-      - step: sentiment
-        tool: skill_sentiment_analyzer
-        args:
-          text: "{{content}}"
-    
-    output: parallel_results
-
-  # 合并结果
-  - step: combine
-    tool: llm_chat
-    args:
-      prompt: |
-        Combine these analyses:
-        Summary: {{steps.parallel_results[0]}}
-        Keywords: {{steps.parallel_results[1]}}
-        Sentiment: {{steps.parallel_results[2]}}
-    output: combined_report
-```
-
-### 模式 3: 条件组合
+### 模式 2: 条件调用
 
 ```yaml
 pipeline:
   # 检测语言
-  - step: detect_language
-    tool: skill_language_detector
+  - step: detect_lang
+    tool: llm_chat
     args:
-      text: "{{content}}"
-    output: detected_lang
+      prompt: "Detect language of: {{content}}"
+    output: lang
 
   # 如果不是英文，先翻译
   - step: translate_to_english
-    tool: skill_translator
+    tool: translate
     args:
       text: "{{content}}"
       target_lang: "en"
     output: english_text
-    when: "{{steps.detect_language.output}} != 'en'"
+    when: "{{steps.detect_lang.output}} != 'en'"
 
   # 使用英文版本进行分析
   - step: analyze
-    tool: skill_sentiment_analyzer
+    tool: analyze_sentiment
     args:
       text: "{{steps.translate_to_english.output}}"
     when: "{{steps.translate_to_english.success}}"
 ```
 
+### 模式 3: Skill 复用
+
+```yaml
+# 同一个 Skill 调用多次
+pipeline:
+  # 翻译成中文
+  - step: translate_to_zh
+    tool: translate
+    args:
+      text: "{{content}}"
+      target_lang: "zh"
+    output: zh_text
+
+  # 翻译成日文
+  - step: translate_to_ja
+    tool: translate
+    args:
+      text: "{{content}}"
+      target_lang: "ja"
+    output: ja_text
+
+  # 翻译成法文
+  - step: translate_to_fr
+    tool: translate
+    args:
+      text: "{{content}}"
+      target_lang: "fr"
+    output: fr_text
+```
+
 ---
 
-## 8. Skill 开发最佳实践
+## 7. 完整示例
+
+### Agent: content-processor
+
+**项目结构**:
+```
+content-processor/
+├── agent.json
+├── orchestrator.yaml
+├── skills/
+│   ├── text-summarizer/
+│   │   ├── agent.json
+│   │   └── worker.yaml
+│   ├── translator/
+│   │   ├── agent.json
+│   │   └── worker.yaml
+│   └── code-formatter/
+│       ├── agent.json
+│       └── worker.yaml
+└── README.md
+```
+
+**agent.json**:
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "content-processor",
+    "version": "1.0.0",
+    "display_name": "Content Processor",
+    "description": "Multi-language content processing with summarization and formatting",
+    "author": "Agent Protocol Team",
+    "tags": ["content", "nlp", "translation"]
+  },
+  "entry": {
+    "main_subagent": "orchestrator"
+  },
+  "subagents": [
+    {
+      "name": "orchestrator",
+      "path": "orchestrator.yaml"
+    },
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/worker.yaml",
+      "type": "skill"
+    },
+    {
+      "name": "translator",
+      "path": "skills/translator/worker.yaml",
+      "type": "skill"
+    },
+    {
+      "name": "code-formatter",
+      "path": "skills/code-formatter/worker.yaml",
+      "type": "skill"
+    }
+  ],
+  "dependencies": {
+    "llm_provider": "anthropic"
+  }
+}
+```
+
+**orchestrator.yaml**:
+```yaml
+tools:
+  - name: read_file
+    type: builtin
+  - name: write_file
+    type: builtin
+  - name: summarize
+    type: subagent
+    subagent: text-summarizer
+  - name: translate
+    type: subagent
+    subagent: translator
+  - name: format_code
+    type: subagent
+    subagent: code-formatter
+
+shared_context:
+  output_dir: "{{output_dir}}"
+
+pipeline:
+  - step: read_input
+    tool: read_file
+    args:
+      path: "{{file_path}}"
+    output: content
+
+  - step: summarize_content
+    tool: summarize
+    args:
+      text: "{{steps.read_input.output}}"
+      max_length: 300
+      format: "bullets"
+    output: summary
+
+  - step: translate_summary
+    tool: translate
+    args:
+      text: "{{steps.summarize_content.output}}"
+      target_lang: "{{target_lang}}"
+    output: translated
+    when: "{{target_lang}} != ''"
+
+  - step: write_output
+    tool: write_file
+    args:
+      path: "{{shared_context.output_dir}}/summary.md"
+      content: "{{steps.translated.output}}"
+```
+
+### 使用示例
+
+```bash
+# 发布
+cd content-processor/
+agent-deploy publish .
+
+# 下载
+agent-deploy download content-processor
+
+# 运行
+agent-deploy run ./content-processor \
+  --args file_path=/data/report.txt \
+  --args output_dir=/tmp \
+  --args target_lang=zh
+
+# 输出:
+# 🚀 Running agent: content-processor
+# 📂 Loading 3 skills...
+# ✅ Skills loaded: text-summarizer, translator, code-formatter
+# 
+# [Pipeline 执行...]
+# ✅ Summary written to: /tmp/summary.md
+```
+
+---
+
+## 8. 最佳实践
 
 ### ✅ DO - 推荐做法
 
-**1. 单一职责**:
+**1. Skills 打包在 Agent 内**:
+```
+my-agent/
+├── agent.json
+├── orchestrator.yaml
+└── skills/           ← Skills 作为 Agent 的一部分
+    ├── skill1/
+    └── skill2/
+```
+
+**2. 单一职责**:
 ```json
 // ✅ Good - 一个 Skill 做一件事
 {
@@ -624,295 +798,92 @@ pipeline:
 }
 ```
 
-**2. 参数化**:
+**3. 清晰的参数定义**:
 ```json
-// ✅ Good - 可配置
-{
-  "parameters": {
-    "max_length": {"type": "number", "default": 200},
-    "format": {"type": "string", "enum": ["bullets", "paragraph"]}
-  }
-}
-
-// ❌ Bad - 硬编码
-// （在 worker.yaml 中硬编码 max_length: 200）
-```
-
-**3. 错误处理**:
-```yaml
-# ✅ Good
-- step: process
-  tool: llm_chat
-  args: {...}
-  on_fail: abort  # 明确失败行为
-
-# ❌ Bad
-- step: process
-  tool: llm_chat
-  args: {...}
-  # 没有 on_fail，不清楚失败时行为
-```
-
-**4. 文档清晰**:
-```json
-// ✅ Good
 {
   "parameters": {
     "text": {
       "type": "string",
       "required": true,
-      "description": "The text content to summarize. Can be up to 10,000 characters."
+      "description": "The text to summarize. Max 10,000 characters."
+    },
+    "max_length": {
+      "type": "number",
+      "default": 200,
+      "description": "Maximum summary length in characters"
     }
   }
 }
+```
 
-// ❌ Bad
-{
-  "parameters": {
-    "text": {"type": "string"}  // 没有 description
-  }
-}
+**4. 避免副作用**:
+```yaml
+# ✅ Good - Skill 只返回结果
+- step: process
+  tool: llm_chat
+  output: result
+
+# ❌ Bad - Skill 修改文件系统
+- step: process_and_save
+  tool: write_file
 ```
 
 ### ❌ DON'T - 避免做法
 
-**1. 避免副作用**:
-```yaml
-# ❌ Bad - Skill 修改文件系统
-- step: save_result
-  tool: write_file  # Skill 不应该有副作用
-
-# ✅ Good - Skill 只返回结果，由调用者决定是否保存
-- step: process
-  tool: llm_chat
-  output: result
-```
-
-**2. 避免状态依赖**:
-```yaml
-# ❌ Bad - 依赖外部状态
-- step: process
-  tool: llm_chat
-  args:
-    prompt: "Process based on previous result"  # 依赖外部状态
-
-# ✅ Good - 所有输入都通过参数传递
-- step: process
-  tool: llm_chat
-  args:
-    prompt: "Process: {{input_text}}"
-```
-
-**3. 避免过度依赖**:
+**1. 不要依赖外部 Skill 市场**:
 ```json
-// ❌ Bad - 依赖太多 MCP tools
+// ❌ Bad - 依赖外部下载
 {
   "dependencies": {
-    "mcp_tools": ["tapd", "dify", "gitlab", "jira", "slack"]
+    "skills": ["marketplace://text-summarizer"]
   }
 }
 
-// ✅ Good - 最小依赖
+// ✅ Good - Skills 打包在 Agent 内
 {
-  "dependencies": {
-    "llm_provider": "anthropic"
-  }
-}
-```
-
----
-
-## 9. Skill 发现与安装
-
-### CLI 命令
-
-```bash
-# 列出本地 Skills
-agent-deploy skill list
-
-# 搜索 Skills
-agent-deploy skill search summarizer
-
-# 安装 Skill
-agent-deploy skill install text-summarizer
-
-# 卸载 Skill
-agent-deploy skill uninstall text-summarizer
-
-# 查看 Skill 信息
-agent-deploy skill info text-summarizer
-
-# 测试 Skill
-agent-deploy skill test text-summarizer \
-  --args text="Long text here..." \
-  --args max_length=100
-```
-
-### Skill Info 输出
-
-```bash
-$ agent-deploy skill info text-summarizer
-
-📦 text-summarizer v1.0.0
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Description: Summarizes text into concise bullet points
-Author: Agent Protocol Team
-License: MIT
-
-Parameters:
-  text (string, required)
-    The text content to summarize
-  
-  max_length (number, default: 200)
-    Maximum length of summary in characters
-  
-  format (string, default: "bullets")
-    Output format: bullets | paragraph
-
-Dependencies:
-  llm_provider: anthropic
-
-Location: ~/.agent-deploy/skills/text-summarizer/
-
-Usage:
-  agent-deploy skill test text-summarizer \
-    --args text="Your text here"
-```
-
----
-
-## 10. 完整示例
-
-### Skill: code-formatter
-
-**agent.json**:
-```json
-{
-  "schema_version": "3.0",
-  "identity": {
-    "name": "code-formatter",
-    "version": "1.0.0",
-    "display_name": "Code Formatter",
-    "description": "Formats code in various programming languages",
-    "author": "Agent Protocol Team",
-    "tags": ["code", "formatting", "skill"]
-  },
-  "type": "skill",
-  "parameters": {
-    "code": {
-      "type": "string",
-      "required": true,
-      "description": "The code to format"
-    },
-    "language": {
-      "type": "string",
-      "required": true,
-      "enum": ["typescript", "javascript", "python", "go", "rust"],
-      "description": "Programming language"
-    },
-    "style": {
-      "type": "string",
-      "enum": ["standard", "google", "airbnb"],
-      "default": "standard",
-      "description": "Code style guide"
-    }
-  },
-  "entry": {
-    "main_subagent": "worker"
-  },
   "subagents": [
     {
-      "name": "worker",
-      "path": "worker.yaml"
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/worker.yaml",
+      "type": "skill"
     }
   ]
 }
 ```
 
-**worker.yaml**:
-```yaml
-tools:
-  - name: bash
-    type: builtin
-  - name: llm_chat
-    type: builtin
+**2. 不要过度依赖**:
+```json
+// ❌ Bad - 依赖太多 Skills
+{
+  "subagents": [
+    {"name": "skill1", "type": "skill"},
+    {"name": "skill2", "type": "skill"},
+    // ... 20+ skills
+  ]
+}
 
-pipeline:
-  # 尝试使用工具格式化
-  - step: try_formatter
-    tool: bash
-    args:
-      command: |
-        case "{{language}}" in
-          typescript|javascript)
-            echo "{{code}}" | npx prettier --parser typescript
-            ;;
-          python)
-            echo "{{code}}" | python -m black -
-            ;;
-          go)
-            echo "{{code}}" | gofmt
-            ;;
-          rust)
-            echo "{{code}}" | rustfmt
-            ;;
-        esac
-    output: formatted_code
-    on_fail: continue
-
-  # Fallback: 使用 LLM
-  - step: llm_format
-    tool: llm_chat
-    args:
-      system_prompt: |
-        You are a code formatter.
-        Format the code according to {{style}} style guide.
-        Only return the formatted code, no explanations.
-      prompt: |
-        Format this {{language}} code:
-        
-        ```{{language}}
-        {{code}}
-        ```
-      temperature: 0.1
-    output: formatted_code
-    when: "{{steps.try_formatter.success}} == false"
+// ✅ Good - 最小 Skills 集合
+{
+  "subagents": [
+    {"name": "summarizer", "type": "skill"},
+    {"name": "translator", "type": "skill"}
+  ]
+}
 ```
 
-### 使用 code-formatter Skill
-
-**在 Agent 中使用**:
+**3. 不要 Skills 间相互依赖**:
 ```yaml
-tools:
-  - name: read_file
-    type: builtin
-  - name: write_file
-    type: builtin
-  - name: code_formatter
-    type: skill
-    skill_name: code-formatter
+# ❌ Bad - Skill A 调用 Skill B
+# skills/skill-a/worker.yaml
+- step: call_skill_b
+  tool: skill_b  # Skill 不应该调用其他 Skills
 
-pipeline:
-  - step: read_code
-    tool: read_file
-    args:
-      path: "{{file_path}}"
-    output: raw_code
-
-  - step: format
-    tool: code_formatter
-    args:
-      code: "{{steps.read_code.output}}"
-      language: "typescript"
-      style: "airbnb"
-    output: formatted
-
-  - step: write_back
-    tool: write_file
-    args:
-      path: "{{file_path}}"
-      content: "{{steps.format.output}}"
+# ✅ Good - 由 orchestrator 协调
+# orchestrator.yaml
+- step: use_skill_a
+  tool: skill_a
+- step: use_skill_b
+  tool: skill_b
 ```
 
 ---
@@ -925,4 +896,4 @@ pipeline:
 
 ---
 
-**Skill System - 可复用的单一功能模块** 🧩
+**Skill System - Skills 打包在 Agent 内，开箱即用** 🧩
