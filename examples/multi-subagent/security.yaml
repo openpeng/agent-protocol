@@ -1,0 +1,24 @@
+tools:
+  - name: read_file
+    type: builtin
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: analyze_security
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a security expert specializing in OWASP Top 10.
+        Analyze code for vulnerabilities:
+        - SQL Injection
+        - XSS
+        - CSRF
+        - Authentication issues
+        - Authorization issues
+        - Sensitive data exposure
+      prompt: |
+        Review these files for security issues:
+        {{file_list}}
+      model: "claude-3-5-sonnet-20241022"
+    output: findings

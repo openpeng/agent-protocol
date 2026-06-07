@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-protocol.org/schemas/worker.schema.json",
+  "title": "Agent Protocol v3.0 - worker.yaml",
+  "description": "Schema for worker.yaml pipeline specification",
+  "type": "object",
+  "required": ["tools", "pipeline"],
+  "properties": {
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$",
+            "description": "Tool name (snake_case)"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["builtin", "custom"],
+            "description": "Tool type"
+          },
+          "config": {
+            "type": "object",
+            "description": "Tool-specific configuration"
+          }
+        }
+      }
+    },
+    "shared_context": {
+      "type": "object",
+      "description": "Shared context variables"
+    },
+    "pipeline": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["step", "tool", "args"],
+        "properties": {
+          "step": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$",
+            "description": "Step unique name (snake_case)"
+          },
+          "tool": {
+            "type": "string",
+            "description": "Tool name from tools declaration"
+          },
+          "args": {
+            "type": "object",
+            "description": "Tool arguments (supports template variables)"
+          },
+          "output": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$",
+            "description": "Output variable name"
+          },
+          "on_fail": {
+            "type": "string",
+            "enum": ["abort", "skip", "continue"],
+            "pattern": "^(abort|skip|continue|retry\\(\\d+\\))$",
+            "description": "Failure handling strategy"
+          },
+          "when": {
+            "type": "string",
+            "description": "Conditional execution expression"
+          }
+        }
+      }
+    }
+  }
+}

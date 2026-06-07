@@ -1,0 +1,11 @@
+tools:
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: greet
+    tool: llm_chat
+    args:
+      prompt: "Say hello to {{user_name}}"
+      system_prompt: "You are a friendly assistant"
+    output: greeting

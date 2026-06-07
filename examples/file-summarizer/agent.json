@@ -1,0 +1,29 @@
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "file-summarizer",
+    "version": "1.0.0",
+    "display_name": "File Summarizer",
+    "description": "Reads text files and generates concise summaries with key points",
+    "author": "Agent Protocol Team",
+    "license": "MIT",
+    "homepage": "https://github.com/agent-protocol/examples",
+    "repository": "https://github.com/agent-protocol/examples",
+    "tags": ["file", "summary", "text-processing", "llm", "productivity"]
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml",
+      "description": "Main summarization workflow"
+    }
+  ],
+  "dependencies": {
+    "llm_provider": "anthropic"
+  },
+  "category": "productivity",
+  "type": "agent"
+}

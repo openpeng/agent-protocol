@@ -1,0 +1,23 @@
+tools:
+  - name: read_file
+    type: builtin
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: analyze_performance
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a performance expert.
+        Identify bottlenecks:
+        - N+1 queries
+        - Unnecessary loops
+        - Memory leaks
+        - Blocking operations
+        - Large payload sizes
+      prompt: |
+        Analyze performance issues in:
+        {{file_list}}
+      model: "claude-3-5-sonnet-20241022"
+    output: findings

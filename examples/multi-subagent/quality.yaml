@@ -1,0 +1,23 @@
+tools:
+  - name: read_file
+    type: builtin
+  - name: llm_chat
+    type: builtin
+
+pipeline:
+  - step: analyze_quality
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a code quality expert.
+        Check for:
+        - Code smells
+        - Poor naming
+        - Missing error handling
+        - Lack of tests
+        - Documentation gaps
+      prompt: |
+        Review code quality for:
+        {{file_list}}
+      model: "claude-3-5-sonnet-20241022"
+    output: findings

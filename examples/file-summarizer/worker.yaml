@@ -1,0 +1,82 @@
+tools:
+  - name: read_file
+    type: builtin
+  - name: llm_chat
+    type: builtin
+  - name: write_file
+    type: builtin
+  - name: bash
+    type: builtin
+
+shared_context:
+  max_summary_length: 500
+
+pipeline:
+  # Step 1: Read input file
+  - step: read_input
+    tool: read_file
+    args:
+      path: "{{file_path}}"
+    output: raw_content
+    on_fail: abort
+
+  # Step 2: Check content length
+  - step: check_length
+    tool: bash
+    args:
+      command: "echo '{{steps.read_input.output}}' | wc -c"
+    output: content_length
+
+  # Step 3: Generate summary (only if content > 1000 chars)
+  - step: generate_summary
+    tool: llm_chat
+    args:
+      system_prompt: |
+        You are a summarization expert.
+        Generate concise summaries with key points in bullet format.
+        Keep the summary under {{shared_context.max_summary_length}} characters.
+      prompt: |
+        Summarize the following text:
+
+        {{steps.read_input.output}}
+
+        Requirements:
+        - Start with a one-sentence overview
+        - List 3-5 key points as bullets
+        - Keep it concise and actionable
+      model: "claude-3-5-sonnet-20241022"
+      temperature: 0.3
+    output: summary
+    when: "{{steps.check_length.output}} > 1000"
+    on_fail: continue
+
+  # Step 4: Fallback for short files
+  - step: short_file_message
+    tool: bash
+    args:
+      command: "echo 'File is too short to summarize (< 1000 characters)'"
+    output: summary
+    when: "{{steps.check_length.output}} <= 1000"
+
+  # Step 5: Fallback if LLM fails
+  - step: fallback_summary
+    tool: bash
+    args:
+      command: "echo '{{steps.read_input.output}}' | head -c {{shared_context.max_summary_length}}"
+    output: summary
+    when: "{{steps.generate_summary.success}} == false"
+
+  # Step 6: Write output
+  - step: write_output
+    tool: write_file
+    args:
+      path: "{{output_path}}"
+      content: |
+        # Summary of {{file_path}}
+
+        {{steps.generate_summary.output}}
+
+        ---
+        Generated: {{timestamp}}
+        Original length: {{steps.check_length.output}} characters
+    on_fail: abort

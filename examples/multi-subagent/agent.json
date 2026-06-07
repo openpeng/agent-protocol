@@ -1,0 +1,42 @@
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "code-auditor",
+    "version": "1.0.0",
+    "display_name": "Code Auditor",
+    "description": "Comprehensive code audit with security, performance, and quality checks",
+    "author": "Agent Protocol Team",
+    "license": "MIT",
+    "tags": ["security", "audit", "code-quality", "performance", "multi-subagent"]
+  },
+  "entry": {
+    "main_subagent": "orchestrator"
+  },
+  "subagents": [
+    {
+      "name": "orchestrator",
+      "path": "orchestrator.yaml",
+      "description": "Coordinates the audit workflow"
+    },
+    {
+      "name": "security",
+      "path": "security.yaml",
+      "description": "Scans for security vulnerabilities"
+    },
+    {
+      "name": "performance",
+      "path": "performance.yaml",
+      "description": "Analyzes performance bottlenecks"
+    },
+    {
+      "name": "quality",
+      "path": "quality.yaml",
+      "description": "Checks code quality and best practices"
+    }
+  ],
+  "dependencies": {
+    "llm_provider": "anthropic"
+  },
+  "category": "security",
+  "type": "workflow"
+}

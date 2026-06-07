@@ -1,0 +1,23 @@
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "minimal-agent",
+    "version": "1.0.0",
+    "description": "A minimal agent example demonstrating the basic structure",
+    "author": "Agent Protocol Team",
+    "license": "MIT",
+    "tags": ["example", "minimal", "demo"]
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml",
+      "description": "Main workflow"
+    }
+  ],
+  "category": "general",
+  "type": "agent"
+}
