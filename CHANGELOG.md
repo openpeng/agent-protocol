@@ -12,15 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 **Core Features**:
-- ✅ Pipeline workflow system (worker.yaml)
-- ✅ Builtin tools system (llm_chat, read_file, write_file, bash, glob, web_fetch, web_search)
-- ✅ Subagent composition mechanism
+- ✅ Pipeline workflow system (worker.yaml) — 串行 + invoke_parallel 并行执行
+- ✅ Builtin tools system (9 工具: llm_chat, read_file, write_file, bash, glob, web_fetch, web_search, invoke_agent, list_agents)
+- ✅ Subagent composition mechanism (invoke + invoke_parallel)
+- ✅ Dynamic Overrides (Phase 8: instructions/skills/MCP shared_context/trusted/cwd/env)
 - ✅ Entry point declaration
-- ✅ Dependencies declaration
-- ✅ Template variable system ({{var}}, {{steps.x.output}}, {{shared_context.key}})
-- ✅ Conditional execution (when clauses)
-- ✅ Error handling strategies (on_fail: abort/skip/continue/retry)
+- ✅ Dependencies declaration + DFS 循环检测
+- ✅ Template variable system ({{var}}, {{steps.x.output}}, {{shared.key}})
+- ✅ Conditional execution (when clauses with ==/!=/>/< operators)
+- ✅ Error handling strategies (on_fail: abort/skip/continue + retry with exponential backoff)
 - ✅ Shared context across pipeline steps
+- ✅ Agent cache (manifest + semver)
 
 **Specifications**:
 - agent.json v3 complete specification
@@ -92,13 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Planned Features
 
-- ⏳ Parallel execution (parallel blocks in pipeline)
 - ⏳ Loop constructs (for_each over arrays)
-- ⏳ Advanced conditionals (&&, || operators in when)
-- ⏳ Subagent tool (direct subagent calls from pipeline)
-- ⏳ Built-in retry with backoff
 - ⏳ Pipeline debugging tools
-- ⏳ Performance profiling
+- ⏳ Performance profiling & monitoring
+- ⏳ Agent lifecycle management (promote/demote workflow)
+- ⏳ Multi-version agent support (install specific versions)
+- ⏳ Agent health check & timeout controls
+- ⏳ Template variable scoping improvements
 
 ---
 
