@@ -1,0 +1,146 @@
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "content-pipeline",
+    "version": "1.0.0",
+    "display_name": "多渠道内容生产流水线",
+    "description": "一个完整的内容生产流水线：从原始主题输入，经研究、写作、质检、最后生成多渠道（博客、社交媒体、邮件）的内容输出。包含条件分支和并行执行。",
+    "author": "Agent Hub Team",
+    "homepage_url": "https://agent-hub.org",
+    "source_url": "https://github.com/agent-hub/agent-protocol/tree/main/examples/content-pipeline",
+    "license": "MIT",
+    "tags": ["workflow", "content", "pipeline", "multi-channel"]
+  },
+  "classification": {
+    "category": "content_generation",
+    "type": "workflow"
+  },
+  "definition": {
+    "inputs": {
+      "topic": {
+        "type": "string",
+        "required": true,
+        "description": "内容生产的核心主题"
+      },
+      "audience": {
+        "type": "string",
+        "default": "general",
+        "description": "目标受众：general, technical, business, student"
+      },
+      "need_social_media": {
+        "type": "boolean",
+        "default": true,
+        "description": "是否需要生成社交媒体内容"
+      }
+    },
+    "outputs": {
+      "blog_post": {
+        "type": "string",
+        "description": "最终的博客文章内容（Markdown 格式）"
+      },
+      "social_media": {
+        "type": "string",
+        "description": "社交媒体帖子（若启用）"
+      },
+      "email_newsletter": {
+        "type": "string",
+        "description": "邮件通讯稿"
+      }
+    },
+    "steps": [
+      {
+        "name": "research_topic",
+        "type": "agent",
+        "ref": "market://web-researcher@1.0.0",
+        "inputs": {
+          "query": "${topic}",
+          "audience": "${audience}"
+        }
+      },
+      {
+        "name": "write_draft",
+        "type": "agent",
+        "ref": "market://content-creator@1.0.0",
+        "inputs": {
+          "topic": "${topic}",
+          "research_summary": "${research_topic.output}",
+          "audience": "${audience}"
+        }
+      },
+      {
+        "name": "quality_review",
+        "type": "agent",
+        "ref": "market://quality-checker@1.0.0",
+        "inputs": {
+          "content": "${write_draft.output}",
+          "topic": "${topic}"
+        }
+      },
+      {
+        "name": "needs_revision",
+        "type": "condition",
+        "condition": "${quality_review.needs_revision} === true",
+        "then": "write_draft",
+        "else": "format_blog"
+      },
+      {
+        "name": "format_blog",
+        "type": "agent",
+        "ref": "market://markdown-formatter@1.0.0",
+        "inputs": {
+          "content": "${write_draft.output}",
+          "style": "blog"
+        }
+      },
+      {
+        "name": "parallel_outputs",
+        "type": "parallel",
+        "steps": [
+          {
+            "name": "generate_email",
+            "type": "agent",
+            "ref": "market://email-writer@1.0.0",
+            "inputs": {
+              "blog_summary": "${format_blog.output}",
+              "audience": "${audience}"
+            }
+          },
+          {
+            "name": "generate_social_media",
+            "type": "condition",
+            "condition": "${need_social_media} === true",
+            "then": "social_media_step",
+            "else": "skip_social_media"
+          }
+        ]
+      },
+      {
+        "name": "social_media_step",
+        "type": "agent",
+        "ref": "market://social-media-writer@1.0.0",
+        "inputs": {
+          "blog_summary": "${format_blog.output}",
+          "platforms": ["twitter", "linkedin", "weibo"]
+        }
+      },
+      {
+        "name": "skip_social_media",
+        "type": "function",
+        "ref": "noop",
+        "inputs": {
+          "result": ""
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "agents": [
+      { "ref": "market://web-researcher", "version": "1.0.0" },
+      { "ref": "market://content-creator", "version": "1.0.0" },
+      { "ref": "market://quality-checker", "version": "1.0.0" },
+      { "ref": "market://markdown-formatter", "version": "1.0.0" },
+      { "ref": "market://email-writer", "version": "1.0.0" },
+      { "ref": "market://social-media-writer", "version": "1.0.0" }
+    ]
+  }
+}

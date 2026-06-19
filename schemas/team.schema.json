@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-protocol.org/schemas/team.schema.json",
+  "title": "Team Package v1.0",
+  "description": "定义一个 Agent 协作团队。Team 通过组合多个 Agent（或其他 Team），并指定协作模式（路由/协作/编排）来完成复杂任务。Team 本身不执行逻辑，仅定义成员与协作方式，具体执行由外部运行时负责。",
+  "type": "object",
+  "required": ["schema_version", "identity", "definition"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "team.json 的规范版本号，固定为 1.0.0"
+    },
+    "identity": {
+      "type": "object",
+      "description": "Team 的元信息，用于市场搜索与展示",
+      "required": ["name", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Team 的唯一标识，使用小写字母/数字/连字符，不超过 64 字符"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$",
+          "description": "语义化版本号，如 1.0.0"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "用户可见的展示名称，用于 UI 与市场列表"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Team 的功能/能力描述，将显示在市场详情页"
+        },
+        "author": {
+          "type": "string",
+          "description": "作者/团队名称"
+        },
+        "homepage_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "项目主页地址（可选）"
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "源代码仓库地址（可选）"
+        },
+        "license": {
+          "type": "string",
+          "description": "许可证，默认 MIT"
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "搜索标签，用于市场分类检索"
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "default": "general",
+          "description": "分类：general, browser, data_analysis, content_creation 等"
+        },
+        "type": {
+          "type": "string",
+          "const": "team",
+          "description": "固定为 team"
+        }
+      }
+    },
+    "instructions": {
+      "type": "object",
+      "description": "Team 的使用说明（可选），可内嵌或引用文件",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["markdown", "text", "yaml"],
+          "default": "markdown"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["inline", "file"],
+          "default": "inline"
+        },
+        "content": {
+          "type": "string",
+          "description": "说明内容；source=file 时此处为文件路径"
+        }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "description": "Team 的协作定义：模式、leader、成员、共享状态",
+      "required": ["mode", "members"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["route", "collaborate", "coordinate"],
+          "description": "协作模式：route=根据任务特征路由到某成员；collaborate=多个成员平等协作完成任务；coordinate=有 leader 统一协调"
+        },
+        "leader": {
+          "type": "object",
+          "description": "Team 的 Leader（仅在 collaborate/coordinate 模式下使用）",
+          "properties": {
+            "name": { "type": "string", "description": "Leader 在 Team 内的名称" },
+            "model": { "type": "string", "description": "推荐使用的模型标识符" },
+            "instructions": { "type": "string", "description": "Leader 的系统提示词" }
+          }
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Team 的成员列表",
+          "items": {
+            "type": "object",
+            "required": ["ref"],
+            "additionalProperties": true,
+            "properties": {
+              "ref": {
+                "type": "string",
+                "description": "成员引用：market://agent-name@version 或 local://相对路径 或 内联完整 agent.json"
+              },
+              "alias": {
+                "type": "string",
+                "description": "成员在 Team 内的别名（用于引用与日志）"
+              },
+              "role": {
+                "type": "string",
+                "description": "成员角色描述，例如 '代码审查者'、'需求分析师'"
+              }
+            }
+          }
+        },
+        "shared_state": {
+          "type": "object",
+          "description": "成员之间的共享状态配置（可选）",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "storage": {
+              "type": "string",
+              "enum": ["memory", "file", "redis"],
+              "default": "memory"
+            },
+            "fields": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "需要共享的字段名列表"
+            }
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "description": "Team 依赖的 Agent 列表（市场或本地）",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string", "description": "market://agent-name 或 local://路径" },
+              "version": { "type": "string", "description": "要求的版本号或版本范围" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
