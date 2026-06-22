@@ -1,0 +1,188 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-protocol.org/schemas/workflow.schema.json",
+  "title": "Workflow Package v1.0",
+  "description": "定义一个可复用的工作流。Workflow 通过编排多个 Agent/Team/自定义函数步骤，描述一个完整业务流程。它仅定义步骤、输入输出、依赖与引用，不负责实际执行，由外部运行时（如 Agno 框架或 Pipeline 引擎）运行。",
+  "type": "object",
+  "required": ["schema_version", "identity", "definition"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0",
+      "description": "workflow.json 的规范版本号，固定为 1.0.0"
+    },
+    "identity": {
+      "type": "object",
+      "description": "Workflow 的元信息，用于市场搜索与展示",
+      "required": ["name", "version"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Workflow 的唯一标识，使用小写字母/数字/连字符"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$",
+          "description": "语义化版本号"
+        },
+        "display_name": {
+          "type": "string",
+          "description": "用户可见的展示名称"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Workflow 的功能描述"
+        },
+        "author": { "type": "string", "description": "作者/团队名称" },
+        "homepage_url": { "type": "string", "format": "uri", "description": "项目主页地址（可选）" },
+        "source_url": { "type": "string", "format": "uri", "description": "源码仓库地址（可选）" },
+        "license": { "type": "string", "description": "许可证，默认 MIT" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "搜索标签"
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "default": "general",
+          "description": "分类：general, data_processing, content_generation 等"
+        },
+        "type": {
+          "type": "string",
+          "const": "workflow",
+          "description": "固定为 workflow"
+        }
+      }
+    },
+    "instructions": {
+      "type": "object",
+      "description": "Workflow 的使用说明（可选）",
+      "properties": {
+        "format": { "type": "string", "enum": ["markdown", "text", "yaml"], "default": "markdown" },
+        "source": { "type": "string", "enum": ["inline", "file"], "default": "inline" },
+        "content": { "type": "string", "description": "说明内容；source=file 时此处为文件路径" }
+      }
+    },
+    "definition": {
+      "type": "object",
+      "description": "Workflow 的步骤定义",
+      "required": ["steps"],
+      "additionalProperties": true,
+      "properties": {
+        "inputs": {
+          "type": "object",
+          "description": "Workflow 接受的输入参数声明",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["string", "number", "boolean", "object"],
+                "description": "参数类型"
+              },
+              "required": { "type": "boolean", "default": false, "description": "是否必填" },
+              "default": { "description": "默认值，类型与 type 对应" },
+              "description": { "type": "string", "description": "参数说明" }
+            },
+            "required": ["type"]
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "description": "Workflow 产出的输出值声明",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "description": "输出类型" },
+              "description": { "type": "string", "description": "输出说明" }
+            },
+            "required": ["type"]
+          }
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "description": "步骤列表，按数组顺序执行；可通过 condition / parallel / loop 进行分支或循环",
+          "items": {
+            "type": "object",
+            "required": ["name", "type"],
+            "additionalProperties": true,
+            "properties": {
+              "name": { "type": "string", "description": "步骤唯一名称" },
+              "type": {
+                "type": "string",
+                "enum": ["agent", "team", "function", "condition", "parallel", "loop"],
+                "description": "步骤类型：agent=调用 Agent；team=调用 Team；function=调用自定义函数；condition=条件分支；parallel=并行步骤；loop=循环步骤"
+              },
+              "ref": {
+                "type": "string",
+                "description": "agent/team/function 类型的引用：market://name 或 local://path"
+              },
+              "inputs": {
+                "type": "object",
+                "description": "输入参数映射；可使用 ${stepName.outputField} 引用其他步骤的输出，或 ${inputName} 引用 Workflow 输入"
+              },
+              "condition": { "type": "string", "description": "条件表达式，仅 condition 类型使用" },
+              "then": { "type": "string", "description": "条件为真时跳转的步骤名" },
+              "else": { "type": "string", "description": "条件为假时跳转的步骤名" },
+              "steps": {
+                "type": "array",
+                "items": { "type": "object" },
+                "description": "parallel 类型的子步骤列表"
+              },
+              "step": { "type": "string", "description": "loop 类型：循环体步骤名" },
+              "max_iterations": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "default": 10,
+                "description": "loop 类型：最大迭代次数"
+              },
+              "until": {
+                "type": "string",
+                "description": "loop 类型：循环退出条件表达式"
+              }
+            }
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "description": "Workflow 依赖的 Agent 列表",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          }
+        },
+        "teams": {
+          "type": "array",
+          "description": "Workflow 依赖的 Team 列表",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

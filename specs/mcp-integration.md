@@ -724,6 +724,132 @@ my-agent/
 
 ---
 
+## 8. Kimi WebBridge — HTTP JSON MCP（非标准 stdio）
+
+### 概述
+
+**Kimi WebBridge** 是一种特殊的 MCP 集成模式：它不依赖 stdio 子进程，而是通过 **HTTP JSON API** 与本地运行的浏览器扩展 daemon 通信。
+
+这意味着：
+- ✅ **不需要 shell / subprocess 权限**
+- ✅ **不依赖 npx / node / python**
+- ✅ **通过浏览器扩展 + 本地 daemon 工作**
+- ✅ **在任何受限环境中都能运行**
+
+### 架构
+
+```
+LLM Agent (Python/Node)
+    │
+    │  POST http://127.0.0.1:10086/command
+    │  {"action": "navigate", "args": {"url": "..."}}
+    ▼
+Kimi WebBridge Daemon (端口 10086)
+    │
+    │  Chrome DevTools Protocol
+    ▼
+浏览器扩展 (Chrome/Edge)
+    │
+    │  真正执行浏览器操作
+    ▼
+用户浏览器中的网页
+```
+
+### 工作原理
+
+1. 用户在 Chrome/Edge 安装 **Kimi WebBridge 浏览器扩展**
+2. 扩展激活后，本地 daemon 监听 `http://127.0.0.1:10086`
+3. Agent 通过 HTTP POST `/command` 发送操作指令
+4. Daemon 通过 CDP（Chrome DevTools Protocol）驱动浏览器执行
+
+### agent.json 声明
+
+```json
+{
+  "schema_version": "2.0",
+  "identity": {
+    "name": "kimi-webbridge-operator",
+    "display_name": "🌉 Kimi WebBridge 浏览器助手",
+    "description": "通过 Kimi WebBridge 浏览器扩展与网页交互"
+  },
+  "mcp_servers": [
+    {
+      "name": "kimi-webbridge",
+      "command": "npx",
+      "args": ["@kimi/webbridge-mcp"]
+    }
+  ],
+  "capabilities": [
+    {"type": "tool_call", "name": "browser_navigate"},
+    {"type": "tool_call", "name": "browser_click"},
+    {"type": "tool_call", "name": "browser_snapshot"},
+    {"type": "tool_call", "name": "browser_evaluate"},
+    {"type": "tool_call", "name": "browser_screenshot"},
+    {"type": "tool_call", "name": "browser_fill"}
+  ]
+}
+```
+
+> **注意**：`command: "npx"` 和 `args` 是声明性的描述，实际运行时 Python/Node 运行时识别 `name` 含 `webbridge` 后会走 HTTP JSON 路径，**不会真正启动 npx 子进程**。
+
+### 工具命名约定（重要）
+
+| 层 | 工具名示例 | 说明 |
+|---|---|---|
+| agent.json capabilities | `browser_navigate` | 市场 agent.json 中的声明名 |
+| 运行时 schema | `webbridge_navigate` | LLM 看到的工具名 |
+| WebBridge daemon action | `navigate` | 底层 HTTP API 的 action |
+
+运行时**同时注册两套名字**（`webbridge_*` + `browser_*`），LLM 用哪个都能匹配。
+
+### HTTP API 接口
+
+- **健康检查**: `GET http://127.0.0.1:10086/status`
+  - 返回: `{"running": true, "extension_connected": true, "version": "v1.10.0"}`
+- **执行命令**: `POST http://127.0.0.1:10086/command`
+  - Body: `{"action": "<action_name>", "args": {...}}`
+  - 成功: `{"ok": true, "data": {...}}`
+  - 失败: `{"ok": false, "error": {"code": "...", "message": "..."}}`
+
+### 可用工具（12 个 WebBridge actions，运行时注册为 24 个 schema）
+
+> 注意：以下工具名是 **LLM 工具 schema 命名**。`webbridge_*` 和 `browser_*` 各注册一份，底层 action 见第三列。
+
+| webbridge_ / browser_ | daemon action | 说明 |
+|---|---|---|
+| `webbridge_navigate` / `browser_navigate` | `navigate` | 打开 URL |
+| `webbridge_snapshot` / `browser_snapshot` | `snapshot` | 获取可访问性树 |
+| `webbridge_click` / `browser_click` | `click` | 点击元素（CSS selector） |
+| `webbridge_fill` / `browser_fill` | `fill` | 填写表单（selector + value） |
+| `webbridge_type` / `browser_type` | `key_type` | 在焦点元素中输入文本 |
+| `webbridge_keys` / `browser_keys` | `send_keys` | 发送按键（enter/tab/escape/arrow 等） |
+| `webbridge_evaluate` / `browser_evaluate` | `evaluate` | 执行 JavaScript |
+| `webbridge_screenshot` / `browser_screenshot` | `screenshot` | 截图 |
+| `webbridge_pdf` / `browser_pdf` | `save_as_pdf` | 保存 PDF |
+| `webbridge_list_tabs` / `browser_list_tabs` | `list_tabs` | 列出 tabs |
+| `webbridge_find_tab` / `browser_find_tab` | `find_tab` | 查找并切换 tab |
+| `webbridge_close_tab` / `browser_close_tab` | `close_tab` | 关闭当前 tab |
+
+### 部署检查清单
+
+部署含 WebBridge 的 Agent 前，确认用户已：
+
+1. 在 Chrome/Edge 安装 [Kimi WebBridge 扩展](https://chrome.google.com/webstore)
+2. 扩展已启用且浏览器 daemon 运行中
+3. `netstat -ano | findstr 10086` 显示 LISTENING
+4. 扩展图标显示"已连接"状态
+
+### 排错
+
+| 症状 | 原因 | 解决 |
+|---|---|---|
+| WebBridge ✗ 无法连接 | 扩展未启用 | 在 Chrome 扩展页面启用 Kimi WebBridge |
+| running=true 但扩展不响应 | 扩展需要重新加载 | 刷新扩展页面，重启浏览器 |
+| HTTP 403/401 | token 不正确 | 设置 `WEBBRIDGE_TOKEN` 环境变量 |
+| 工具调用后页面没变化 | 页面尚未加载完成 | 在 snapshot 前加 `time.sleep(1)` 等待 |
+
+---
+
 ## 参考
 
 - [MCP Protocol Specification](https://modelcontextprotocol.io/)

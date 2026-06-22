@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "doc-production-team",
+    "version": "1.0.0",
+    "display_name": "文档生产团队",
+    "description": "一个协作式文档生产团队，包含需求分析师、内容撰写者、质量检查者三个角色成员，通过 Leader 统一协调完成高质量文档输出。",
+    "author": "Agent Hub Team",
+    "homepage_url": "https://agent-hub.org",
+    "source_url": "https://github.com/agent-hub/agent-protocol/tree/main/examples/doc-production-team",
+    "license": "MIT",
+    "tags": ["content", "documentation", "team", "collaboration"]
+  },
+  "classification": {
+    "category": "content_creation",
+    "type": "team"
+  },
+  "definition": {
+    "mode": "coordinate",
+    "leader": {
+      "name": "doc_production_leader",
+      "model": "claude-sonnet",
+      "instructions": "你是文档生产团队的 Leader。负责协调三个成员协作完成文档任务：1) 将用户需求发送给需求分析师澄清目标和大纲；2) 将大纲交给内容撰写者生成文档草稿；3) 将草稿交给质量检查者进行审查；4) 汇总审查意见迭代至文档定稿。你需要把控整体流程，确保成员之间的上下文传递完整和最终交付物高质量。"
+    },
+    "members": [
+      {
+        "ref": "market://requirements-analyst@1.0.0",
+        "alias": "analyst",
+        "role": "需求分析师：理解用户意图，输出文档大纲与关键要点"
+      },
+      {
+        "ref": "market://content-creator@1.0.0",
+        "alias": "writer",
+        "role": "内容撰写者：根据大纲撰写文档内容草稿"
+      },
+      {
+        "ref": "market://quality-checker@1.0.0",
+        "alias": "reviewer",
+        "role": "质量检查者：检查文档的准确性、完整性和风格"
+      }
+    ],
+    "shared_state": {
+      "enabled": true,
+      "storage": "memory",
+      "fields": ["topic", "outline", "draft", "review_comments", "final_doc"]
+    }
+  },
+  "dependencies": {
+    "agents": [
+      { "ref": "market://requirements-analyst", "version": "1.0.0" },
+      { "ref": "market://content-creator", "version": "1.0.0" },
+      { "ref": "market://quality-checker", "version": "1.0.0" }
+    ]
+  }
+}
