@@ -1,20 +1,25 @@
 # Skill System 规范
 
-**版本**: 3.0.0  
-**状态**: Draft  
-**最后更新**: 2026-06-07
+**版本**: 3.1.0
+**状态**: Draft
+**最后更新**: 2026-06-23
 
 ---
 
 ## 概述
 
-Skill System 让 Agent 能够包含和调用可复用的技能（Skills）。在 Agent Protocol v3 中，**Skills 作为 Agent 的一部分打包发布**，而不是从独立的 Skill 市场下载。
+Skill System 让 Agent 能够包含和调用可复用的技能（Skills）。在 Agent Protocol v3 中，**Skill 是 Agent 的可复用能力模块，使用 `skill.json` 定义**。
+
+v3.1 扩展引入了**市场引用模式**，Agent 可以通过 `ref` 引用市场中的 Skill，运行时自动解析和下载，实现 Skill 的独立分发与跨 Agent 复用。
 
 ### 核心理念
 
-✅ **Skills 打包在 Agent 内** - 作为 subagents 一起发布  
-✅ **自包含** - Agent 包含所有需要的 Skills，无需额外下载  
-✅ **可复用** - 多个 subagents 可以使用相同的 Skill
+- **Skills 打包在 Agent 内** - 作为独立能力单元一起发布
+- **自包含** - Agent 包含所有需要的 Skills，无需额外下载
+- **可复用** - 多个 subagents 可以使用相同的 Skill
+- **市场引用（v3.1 新增）** - 通过 `ref` 引用市场 Skill，运行时自动解析与缓存
+- **混合模式（推荐）** - 内联打包与市场引用灵活组合，兼顾自包含与复用
+- **独立格式** - Skill 是独立的能力单元，使用 `skill.json` 定义，与 Agent 格式解耦
 
 ---
 
@@ -28,29 +33,29 @@ Skill System 让 Agent 能够包含和调用可复用的技能（Skills）。在
 | **Pipeline** | 1-3 步 | 多步骤，有条件分支 |
 | **用途** | 被其他 subagents 调用 | 独立发布或包含 Skills |
 | **发布方式** | 作为 Agent 的一部分 | 独立发布到 Market |
+| **定义文件** | `skill.json` | `agent.json` |
 | **示例** | "总结文本"、"翻译" | "内容处理器"（含多个 Skills） |
 
 ### Skill 标记
 
-在 agent.json 中使用 `"type": "skill"` 标记：
+Skill 使用独立的 `skill.json` 文件定义，不再依赖 `agent.json` 中的 `type` 字段：
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "1.0.0",
   "identity": {
     "name": "text-summarizer",
     "version": "1.0.0",
     "description": "Summarizes text into concise bullet points"
   },
-  "type": "skill",  // ← 标记为 skill
-  "entry": {
-    "main_subagent": "worker"
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
   },
-  "subagents": [
-    {
-      "name": "worker",
-      "path": "worker.yaml"
-    }
+  "capabilities": [
+    "text-summarization",
+    "bullet-point-generation"
   ]
 }
 ```
@@ -67,13 +72,13 @@ content-processor/              # 主 Agent
 ├── orchestrator.yaml           # 主工作流
 ├── skills/                     # Skills 目录
 │   ├── text-summarizer/        # Skill 1
-│   │   ├── agent.json          # type: "skill"
+│   │   ├── skill.json          # Skill 定义
 │   │   └── worker.yaml
 │   ├── translator/             # Skill 2
-│   │   ├── agent.json
+│   │   ├── skill.json
 │   │   └── worker.yaml
 │   └── markdown-formatter/     # Skill 3
-│       ├── agent.json
+│       ├── skill.json
 │       └── worker.yaml
 └── README.md
 ```
@@ -99,24 +104,29 @@ content-processor/              # 主 Agent
       "name": "orchestrator",
       "path": "orchestrator.yaml",
       "description": "Main workflow coordinator"
-    },
+    }
+  ],
+  "skills": [
     {
       "name": "text-summarizer",
-      "path": "skills/text-summarizer/worker.yaml",
+      "display_name": "Text Summarizer",
       "description": "Summarizes text",
-      "type": "skill"  // ← 标记为 skill
+      "version": "1.0.0",
+      "source": "local"
     },
     {
       "name": "translator",
-      "path": "skills/translator/worker.yaml",
+      "display_name": "Translator",
       "description": "Translates text",
-      "type": "skill"
+      "version": "1.0.0",
+      "source": "local"
     },
     {
       "name": "markdown-formatter",
-      "path": "skills/markdown-formatter/worker.yaml",
+      "display_name": "Markdown Formatter",
       "description": "Formats markdown",
-      "type": "skill"
+      "version": "1.0.0",
+      "source": "local"
     }
   ]
 }
@@ -130,16 +140,16 @@ tools:
     type: builtin
   - name: write_file
     type: builtin
-  
+
   # Skill 作为 subagent tool
   - name: summarize
     type: subagent
     subagent: text-summarizer
-  
+
   - name: translate
     type: subagent
     subagent: translator
-  
+
   - name: format_markdown
     type: subagent
     subagent: markdown-formatter
@@ -188,18 +198,33 @@ pipeline:
 
 ## 3. Skill 定义
 
-### Skill: text-summarizer
+### skill.json 格式
 
-**skills/text-summarizer/agent.json**:
+Skill 使用独立的 `skill.json` 文件定义，格式如下：
+
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "1.0.0",
   "identity": {
     "name": "text-summarizer",
     "version": "1.0.0",
-    "description": "Summarizes text into concise bullet points"
+    "display_name": "Text Summarizer",
+    "description": "Summarizes text into concise bullet points",
+    "author": "Your Name",
+    "license": "MIT",
+    "tags": ["text", "summarization", "nlp"],
+    "icon": "📝"
   },
-  "type": "skill",
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "text-summarization",
+    "bullet-point-generation",
+    "content-condensation"
+  ],
   "parameters": {
     "text": {
       "type": "string",
@@ -218,15 +243,78 @@ pipeline:
       "description": "Output format"
     }
   },
-  "entry": {
-    "main_subagent": "worker"
+  "scripts": {
+    "pre_install": "scripts/pre-install.sh",
+    "post_run": "scripts/post-run.py"
   },
-  "subagents": [
-    {
-      "name": "worker",
-      "path": "worker.yaml"
+  "dependencies": {
+    "nodejs": ">=18.0.0"
+  }
+}
+```
+
+#### 字段说明
+
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `schema_version` | string | 是 | Skill 规范版本，当前为 `1.0.0` |
+| `identity` | object | 是 | Skill 身份标识 |
+| `identity.name` | string | 是 | Skill 唯一名称（kebab-case） |
+| `identity.version` | string | 是 | 语义化版本号 |
+| `identity.display_name` | string | 否 | 展示名称 |
+| `identity.description` | string | 是 | 一句话描述 |
+| `identity.author` | string | 否 | 作者 |
+| `identity.license` | string | 否 | 许可证 |
+| `identity.tags` | string[] | 否 | 标签数组 |
+| `identity.icon` | string | 否 | 图标（emoji 或 URL） |
+| `content` | object | 是 | Skill 指令内容 |
+| `content.format` | string | 是 | 内容格式：`markdown`、`text`、`yaml` |
+| `content.source` | string | 是 | 内容来源：`inline`、`file` |
+| `content.file` | string | 条件 | 当 `source` 为 `file` 时，指定文件路径 |
+| `content.value` | string | 条件 | 当 `source` 为 `inline` 时，内联内容 |
+| `capabilities` | string[] | 否 | Skill 提供的能力列表 |
+| `parameters` | object | 否 | 参数定义（从 worker.yaml 移入） |
+| `scripts` | object | 否 | 脚本钩子 |
+| `dependencies` | object | 否 | 环境依赖 |
+
+### Skill: text-summarizer
+
+**skills/text-summarizer/skill.json**:
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "text-summarizer",
+    "version": "1.0.0",
+    "description": "Summarizes text into concise bullet points"
+  },
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "text-summarization",
+    "bullet-point-generation"
+  ],
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to summarize"
+    },
+    "max_length": {
+      "type": "number",
+      "default": 200,
+      "description": "Maximum summary length"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["bullets", "paragraph"],
+      "default": "bullets",
+      "description": "Output format"
     }
-  ]
+  }
 }
 ```
 
@@ -252,16 +340,24 @@ pipeline:
 
 ### Skill: translator
 
-**skills/translator/agent.json**:
+**skills/translator/skill.json**:
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "1.0.0",
   "identity": {
     "name": "translator",
     "version": "1.0.0",
     "description": "Translates text between languages"
   },
-  "type": "skill",
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "text-translation",
+    "language-detection"
+  ],
   "parameters": {
     "text": {
       "type": "string",
@@ -279,16 +375,7 @@ pipeline:
       "default": "auto",
       "description": "Source language (auto-detect if not specified)"
     }
-  },
-  "entry": {
-    "main_subagent": "worker"
-  },
-  "subagents": [
-    {
-      "name": "worker",
-      "path": "worker.yaml"
-    }
-  ]
+  }
 }
 ```
 
@@ -307,9 +394,9 @@ pipeline:
         Translate accurately and naturally.
       prompt: |
         Translate from {{source_lang}} to {{target_lang}}:
-        
+
         {{text}}
-        
+
         Only return the translation, no explanations.
       temperature: 0.3
     output: translation
@@ -330,8 +417,14 @@ cd content-processor/
 # ├── orchestrator.yaml
 # ├── skills/
 # │   ├── text-summarizer/  ← Skill 1
+# │   │   ├── skill.json
+# │   │   └── worker.yaml
 # │   ├── translator/       ← Skill 2
+# │   │   ├── skill.json
+# │   │   └── worker.yaml
 # │   └── markdown-formatter/  ← Skill 3
+# │       ├── skill.json
+# │       └── worker.yaml
 # └── README.md
 
 # 发布到 Market
@@ -355,8 +448,14 @@ agent-deploy download content-processor
 # ├── orchestrator.yaml
 # ├── skills/
 # │   ├── text-summarizer/  ← Skills 已包含
+# │   │   ├── skill.json
+# │   │   └── worker.yaml
 # │   ├── translator/
+# │   │   ├── skill.json
+# │   │   └── worker.yaml
 # │   └── markdown-formatter/
+# │       ├── skill.json
+# │       └── worker.yaml
 # └── README.md
 
 # 运行 Agent (Skills 自动可用)
@@ -369,12 +468,12 @@ agent-deploy run ./content-processor \
 # 🚀 Running agent: content-processor
 # 📂 Loading skills: text-summarizer, translator, markdown-formatter
 # ✅ Skills loaded: 3
-# 
+#
 # [读取文件...]
 # [调用 Skill: text-summarizer...]
 # [调用 Skill: translator...]
 # [调用 Skill: markdown-formatter...]
-# 
+#
 # ✅ Result written to: /tmp/summary.md
 ```
 
@@ -387,33 +486,39 @@ agent-deploy run ./content-processor \
 ```typescript
 // src/runtime/skills/loader.ts
 export class SkillLoader {
-  async loadSkillsFromAgent(agent: Agent): Promise<Map<string, Agent>> {
-    const skills = new Map<string, Agent>();
+  async loadSkillsFromAgent(agent: Agent): Promise<Map<string, Skill>> {
+    const skills = new Map<string, Skill>();
 
-    // 遍历 subagents，找到 type: "skill" 的
-    for (const subagentDef of agent.subagents) {
-      if (subagentDef.type !== "skill") {
-        continue;
-      }
-
-      // 加载 Skill 的 agent.json
+    // 读取 agent.json 中的 skills 数组
+    for (const skillDef of agent.skills || []) {
+      // 加载 Skill 的 skill.json
       const skillPath = path.resolve(
         agent.basePath,
-        path.dirname(subagentDef.path),
-        "agent.json"
+        "skills",
+        skillDef.name,
+        "skill.json"
       );
 
-      const skillAgent = await this.loadAgent(skillPath);
-
-      // 验证是 Skill 类型
-      if (skillAgent.type !== "skill") {
-        console.warn(`Subagent ${subagentDef.name} declared as skill but type is not "skill"`);
-      }
-
-      skills.set(subagentDef.name, skillAgent);
+      const skill = await this.loadSkill(skillPath);
+      skills.set(skillDef.name, skill);
     }
 
     return skills;
+  }
+
+  async loadSkill(skillPath: string): Promise<Skill> {
+    const content = await fs.readFile(skillPath, "utf-8");
+    const skillJson = JSON.parse(content);
+
+    // 加载 SKILL.md 内容
+    const skillDir = path.dirname(skillPath);
+    const skillMdPath = path.join(skillDir, skillJson.content.file || "SKILL.md");
+    const skillMdContent = await fs.readFile(skillMdPath, "utf-8");
+
+    return {
+      ...skillJson,
+      skillMdContent
+    };
   }
 }
 ```
@@ -425,35 +530,31 @@ export class SkillLoader {
 export class SubagentTool implements BuiltinTool {
   name: string;
   type = "subagent";
-  
+
   constructor(
     private subagentName: string,
-    private subagentAgent: Agent
+    private skill: Skill
   ) {
     this.name = `subagent_${subagentName}`;
   }
 
   async execute(args: any, context: ExecutionContext): Promise<any> {
-    // 1. 验证参数 (如果是 Skill)
-    if (this.subagentAgent.type === "skill") {
-      this.validateParameters(args, this.subagentAgent.parameters);
-    }
+    // 1. 验证参数
+    this.validateParameters(args, this.skill.parameters);
 
     // 2. 创建隔离的执行上下文
     const subagentContext = {
       ...context,
       initialArgs: args,
       steps: new Map(),  // 隔离步骤上下文
-      agent: this.subagentAgent
+      skill: this.skill
     };
 
-    // 3. 执行 subagent pipeline
+    // 3. 执行 skill pipeline
     const engine = new PipelineEngine(context.toolRegistry, context.logger);
-    const entryYaml = this.subagentAgent.subagents.get(
-      this.subagentAgent.entry.main_subagent
-    );
-    
-    const result = await engine.execute(entryYaml, subagentContext);
+    const workerYaml = await this.loadWorkerYaml(this.skill);
+
+    const result = await engine.execute(workerYaml, subagentContext);
 
     return result;
   }
@@ -466,7 +567,7 @@ export class SubagentTool implements BuiltinTool {
 
     const validator = new SkillParameterValidator();
     const result = validator.validate(args, parameters);
-    
+
     if (!result.valid) {
       throw new Error(
         `Invalid parameters for skill ${this.subagentName}: ` +
@@ -639,13 +740,13 @@ content-processor/
 ├── orchestrator.yaml
 ├── skills/
 │   ├── text-summarizer/
-│   │   ├── agent.json
+│   │   ├── skill.json
 │   │   └── worker.yaml
 │   ├── translator/
-│   │   ├── agent.json
+│   │   ├── skill.json
 │   │   └── worker.yaml
 │   └── code-formatter/
-│       ├── agent.json
+│       ├── skill.json
 │       └── worker.yaml
 └── README.md
 ```
@@ -669,21 +770,29 @@ content-processor/
     {
       "name": "orchestrator",
       "path": "orchestrator.yaml"
-    },
+    }
+  ],
+  "skills": [
     {
       "name": "text-summarizer",
-      "path": "skills/text-summarizer/worker.yaml",
-      "type": "skill"
+      "display_name": "Text Summarizer",
+      "description": "Summarizes text into concise bullet points",
+      "version": "1.0.0",
+      "source": "local"
     },
     {
       "name": "translator",
-      "path": "skills/translator/worker.yaml",
-      "type": "skill"
+      "display_name": "Translator",
+      "description": "Translates text between languages",
+      "version": "1.0.0",
+      "source": "local"
     },
     {
       "name": "code-formatter",
-      "path": "skills/code-formatter/worker.yaml",
-      "type": "skill"
+      "display_name": "Code Formatter",
+      "description": "Formats code in various languages",
+      "version": "1.0.0",
+      "source": "local"
     }
   ],
   "dependencies": {
@@ -742,6 +851,121 @@ pipeline:
       content: "{{steps.translated.output}}"
 ```
 
+**skills/text-summarizer/skill.json**:
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "text-summarizer",
+    "version": "1.0.0",
+    "display_name": "Text Summarizer",
+    "description": "Summarizes text into concise bullet points"
+  },
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "text-summarization",
+    "bullet-point-generation"
+  ],
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to summarize"
+    },
+    "max_length": {
+      "type": "number",
+      "default": 200,
+      "description": "Maximum summary length"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["bullets", "paragraph"],
+      "default": "bullets",
+      "description": "Output format"
+    }
+  }
+}
+```
+
+**skills/translator/skill.json**:
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "translator",
+    "version": "1.0.0",
+    "display_name": "Translator",
+    "description": "Translates text between languages"
+  },
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "text-translation",
+    "language-detection"
+  ],
+  "parameters": {
+    "text": {
+      "type": "string",
+      "required": true,
+      "description": "Text to translate"
+    },
+    "target_lang": {
+      "type": "string",
+      "required": true,
+      "enum": ["en", "zh", "es", "fr", "de", "ja"],
+      "description": "Target language"
+    },
+    "source_lang": {
+      "type": "string",
+      "default": "auto",
+      "description": "Source language (auto-detect if not specified)"
+    }
+  }
+}
+```
+
+**skills/code-formatter/skill.json**:
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "code-formatter",
+    "version": "1.0.0",
+    "display_name": "Code Formatter",
+    "description": "Formats code in various languages"
+  },
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "code-formatting",
+    "syntax-highlighting"
+  ],
+  "parameters": {
+    "code": {
+      "type": "string",
+      "required": true,
+      "description": "Code to format"
+    },
+    "language": {
+      "type": "string",
+      "required": true,
+      "enum": ["javascript", "python", "go", "rust", "java"],
+      "description": "Programming language"
+    }
+  }
+}
+```
+
 ### 使用示例
 
 ```bash
@@ -762,7 +986,7 @@ agent-deploy run ./content-processor \
 # 🚀 Running agent: content-processor
 # 📂 Loading 3 skills...
 # ✅ Skills loaded: text-summarizer, translator, code-formatter
-# 
+#
 # [Pipeline 执行...]
 # ✅ Summary written to: /tmp/summary.md
 ```
@@ -780,21 +1004,29 @@ my-agent/
 ├── orchestrator.yaml
 └── skills/           ← Skills 作为 Agent 的一部分
     ├── skill1/
+    │   ├── skill.json
+    │   └── worker.yaml
     └── skill2/
+        ├── skill.json
+        └── worker.yaml
 ```
 
 **2. 单一职责**:
 ```json
 // ✅ Good - 一个 Skill 做一件事
 {
-  "name": "text-summarizer",
-  "description": "Summarizes text"
+  "identity": {
+    "name": "text-summarizer",
+    "description": "Summarizes text"
+  }
 }
 
 // ❌ Bad - 太多职责
 {
-  "name": "text-processor",
-  "description": "Summarizes, translates, and formats text"
+  "identity": {
+    "name": "text-processor",
+    "description": "Summarizes, translates, and formats text"
+  }
 }
 ```
 
@@ -830,22 +1062,35 @@ my-agent/
 
 ### ❌ DON'T - 避免做法
 
-**1. 不要依赖外部 Skill 市场**:
+**1. 推荐市场引用模式实现 Skill 复用**:
 ```json
-// ❌ Bad - 依赖外部下载
+// ✅ Good - 通过市场引用复用 Skill
 {
-  "dependencies": {
-    "skills": ["marketplace://text-summarizer"]
-  }
+  "skills": [
+    {
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    }
+  ]
 }
 
-// ✅ Good - Skills 打包在 Agent 内
+// ✅ Good - 混合模式：引用 + 本地
 {
-  "subagents": [
+  "skills": [
     {
-      "name": "text-summarizer",
-      "path": "skills/text-summarizer/worker.yaml",
-      "type": "skill"
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "name": "custom-skill",
+      "display_name": "Custom Skill",
+      "description": "Agent-specific custom skill",
+      "version": "1.0.0",
+      "source": "local"
     }
   ]
 }
@@ -855,18 +1100,18 @@ my-agent/
 ```json
 // ❌ Bad - 依赖太多 Skills
 {
-  "subagents": [
-    {"name": "skill1", "type": "skill"},
-    {"name": "skill2", "type": "skill"},
+  "skills": [
+    {"name": "skill1"},
+    {"name": "skill2"},
     // ... 20+ skills
   ]
 }
 
 // ✅ Good - 最小 Skills 集合
 {
-  "subagents": [
-    {"name": "summarizer", "type": "skill"},
-    {"name": "translator", "type": "skill"}
+  "skills": [
+    {"name": "summarizer", "source": "local"},
+    {"name": "translator", "source": "local"}
   ]
 }
 ```
@@ -885,6 +1130,248 @@ my-agent/
 - step: use_skill_b
   tool: skill_b
 ```
+
+---
+
+## 9. 市场引用模式（v3.1 扩展）
+
+v3.1 在原有内联打包的基础上，新增了**市场引用模式**，允许 Agent 通过引用标识从云端市场获取 Skill，运行时自动解析、下载并缓存。
+
+### 9.1 三种使用模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| **内联打包**（现有） | Skill 完整定义在 Agent 的 `skills/` 目录中 | Agent 专属 Skill、离线场景 |
+| **市场引用**（新增） | 通过 `ref` 引用市场 Skill，运行时自动下载 | 通用 Skill、跨 Agent 复用 |
+| **混合**（推荐） | 内联 + 引用灵活组合 | 大多数生产场景 |
+
+```
+模式 A: 内联打包（现有）          模式 B: 市场引用（新增）           模式 C: 混合（推荐）
+┌─────────────────────┐          ┌─────────────────────┐          ┌─────────────────────┐
+│ my-agent/           │          │ my-agent/           │          │ my-agent/           │
+│ ├── agent.json      │          │ ├── agent.json      │          │ ├── agent.json      │
+│ │   └── skills: [   │          │ │   └── skills: [   │          │ │   └── skills: [   │
+│ │       {name,      │          │ │       {ref,       │          │ │       {ref,       │
+│ │        display,   │          │ │        version,   │          │ │        version},  │
+│ │        desc,      │          │ │        market_url}│          │ │       {name,      │
+│ │        version,   │          │ │   ]               │          │ │        display,   │
+│ │        source:    │          │                     │          │ │        ...}       │
+│ │        "local"}   │          │ 运行时自动下载:      │          │ │   ]               │
+│ │   ]               │          │ ~/.agent-hub/cache/ │          │ ├── skills/         │
+│ └── skills/         │          │   └── skills/       │          │ │   └── local-skill/│
+│     └── skill-a/    │          │       └── skill-a/  │          │ │       ├── skill.json│
+│         ├── skill.json│        │           └── ...   │          │ │       └── worker.yaml│
+│         └── worker.yaml│       │                     │          │ └─────────────────────┘
+└─────────────────────┘          └─────────────────────┘
+     自包含但臃肿                    精简但依赖网络
+```
+
+### 9.2 SkillRef 引用格式
+
+在 agent.json 的 `skills` 数组中，使用以下字段实现市场引用：
+
+```typescript
+interface SkillRef {
+  // 模式 A: 本地内联定义
+  name?: string;
+  display_name?: string;
+  description?: string;
+  version?: string;
+  category?: string;
+  icon?: string;
+  parameters?: Record<string, any>;
+
+  // 模式 B: 市场引用（v3.1 新增）
+  ref?: string;           // 引用标识: "html-anything" 或 "openpeng/html-anything"
+  version?: string;       // 版本约束: "^1.0.0", ">=2.0.0", "*"
+  market_url?: string;    // 市场地址: "https://market.aitboy.cn"
+  source?: "local" | "market";  // 来源类型
+}
+```
+
+**解析规则**:
+- 如果 `ref` 存在 → 市场引用模式
+- 如果 `name` 存在且无 `ref` → 本地内联模式
+- `source` 显式声明时以 `source` 为准
+
+#### 版本约束语法
+
+| 语法 | 含义 | 示例 |
+|------|------|------|
+| `1.0.0` | 精确版本 | 只匹配 1.0.0 |
+| `^1.0.0` | 兼容版本 | 匹配 1.x.x，不匹配 2.0.0 |
+| `~1.0.0` | 近似版本 | 匹配 1.0.x，不匹配 1.1.0 |
+| `>=1.0.0` | 大于等于 | 匹配 1.0.0 及以上 |
+| `*` | 任意版本 | 匹配最新版本 |
+
+#### 引用示例
+
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "content-processor",
+    "version": "1.0.0",
+    "description": "Content processing with referenced skills"
+  },
+  "skills": [
+    {
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "ref": "text-summarizer",
+      "version": "~2.1.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    }
+  ]
+}
+```
+
+### 9.3 Skill 独立包规范
+
+市场引用的 Skill 以独立包形式发布，包含以下文件：
+
+```
+html-anything-skill/
+├── skill.json          # Skill 元数据（必需）
+├── SKILL.md            # Skill 指令内容（必需）
+├── scripts/            # 可执行脚本（可选）
+│   ├── pre-install.sh  # 安装前钩子
+│   └── post-run.py     # 运行后钩子
+├── templates/          # 模板文件（可选）
+│   └── default.html
+└── README.md           # 使用说明（可选）
+```
+
+#### skill.json 格式
+
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "html-anything",
+    "version": "1.0.0",
+    "display_name": "HTML Anything",
+    "description": "将 Markdown、CSV、Excel 等内容转换为精美可发布的 HTML",
+    "author": "Open Design Team",
+    "license": "MIT",
+    "tags": ["html", "design", "publish", "markdown"]
+  },
+  "content": {
+    "format": "markdown",
+    "source": "file",
+    "file": "SKILL.md"
+  },
+  "capabilities": [
+    "html-generation",
+    "markdown-to-html",
+    "presentation-creation"
+  ],
+  "scripts": {
+    "pre_install": "scripts/pre-install.sh",
+    "post_run": "scripts/post-run.py"
+  },
+  "dependencies": {
+    "nodejs": ">=18.0.0"
+  }
+}
+```
+
+**打包规则**:
+- tar.gz 格式，顶层目录名为 `{name}-v{version}/`
+- 必须包含 `skill.json` 和 `SKILL.md`
+- 可选包含 `scripts/`、`templates/`、`README.md`
+- 总大小不超过 10MB
+
+### 9.4 运行时引用解析
+
+Agent 启动时，运行时自动解析所有 `ref` 引用并加载对应 Skill：
+
+```
+Agent 启动
+  │
+  ▼
+读取 agent.json
+  │
+  ▼
+解析 skills 数组 ──┬── 本地定义 → 直接从 skills/ 目录加载
+                  └── 引用定义 → 解析引用
+                                    │
+                                    ▼
+                              检查本地缓存
+                              ~/.agent-hub/cache/skills/{ref}@{version}/
+                                    │
+                          ┌─────────┴─────────┐
+                          ▼                   ▼
+                      缓存命中            缓存未命中
+                          │                   │
+                          ▼                   ▼
+                      直接使用          从市场下载
+                      加载 SKILL.md     解压到缓存目录
+                      加载 scripts      验证 skill.json
+                          │                   │
+                          └─────────┬─────────┘
+                                    ▼
+                              合并到 Agent 上下文
+                              (SKILL.md → system prompt)
+```
+
+### 9.5 缓存策略
+
+```
+~/.agent-hub/cache/
+├── skills/
+│   ├── html-anything@1.0.0/
+│   │   ├── skill.json
+│   │   ├── SKILL.md
+│   │   └── scripts/
+│   ├── text-summarizer@2.1.0/
+│   └── ...
+└── index.json          # 缓存索引: {ref: {version, path, downloaded_at, etag}}
+```
+
+**缓存规则**:
+- 按 `ref@resolved_version` 目录存储
+- 下载时记录 `etag`，启动时检查是否需要更新
+- `version: "*"` 或 `^x.x.x` 时，每日检查一次最新版本
+- 缓存清理: `agent-deploy skill cache clean --unused-for 30d`
+
+### 9.6 CLI 命令
+
+```bash
+# 打包 Skill
+agent-deploy skill pack <path> [-o, --output <file>]
+
+# 验证 Skill 包
+agent-deploy skill verify <file>
+
+# 上传 Skill 到市场
+agent-deploy skill upload <path> [-m, --market <url>] [-k, --api-key <key>] [-f, --force]
+
+# 从市场下载 Skill
+agent-deploy skill download <ref> [-v, --version <ver>] [-o, --output <dir>]
+
+# 列出已缓存的 Skills
+agent-deploy skill list --cached
+
+# 搜索市场 Skills
+agent-deploy skill search <query> [-m, --market <url>]
+
+# 清理 Skill 缓存
+agent-deploy skill cache clean [--unused-for <days>] [--ref <ref>]
+```
+
+### 9.7 向后兼容性
+
+| 场景 | 兼容性 |
+|------|------|
+| 现有内联 skills 数组 | 完全兼容，无 `ref` 字段时按内联处理 |
+| 现有 `skills/` 目录打包 | 完全兼容，`skill.json` 格式已更新 |
+| 新引用模式 Agent | 需要运行时支持引用解析（agent-compose 升级后） |
 
 ---
 

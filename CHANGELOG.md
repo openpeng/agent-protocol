@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.1.0] - 2026-06-23
+
+### Added
+
+**Skill & MCP Independent Packaging**:
+- Skill 独立打包规范 — `skill.json` + `SKILL.md` + `scripts/` + `templates/`
+- MCP Server 独立打包规范 — `mcp-server.json` + `mcp-config.json`
+- CLI 打包命令：`agent-deploy skill pack`、`agent-deploy mcp pack`
+- CLI 上传/下载命令：`agent-deploy skill upload/download`、`agent-deploy mcp upload/download`
+
+**Market Reference Mechanism**:
+- Agent `skills` 数组支持 `ref` + `version` + `market_url` 市场引用模式
+- Agent `mcp_servers` 数组支持 `ref` + `version` + `market_url` 市场引用模式
+- 混合模式：同一 Agent 中内联定义与市场引用共存
+- 市场端点：`POST /skills/upload`、`GET /skills/{id}/download`、`POST /mcp-servers/upload`、`GET /mcp-servers/{id}/download`
+
+**Version Constraints**:
+- 语义化版本约束语法：`^1.0.0`、`~1.0.0`、`>=1.0.0`、`*`、精确版本
+- 运行时版本解析器：查询市场可用版本，按约束匹配并自动降级
+
+**Runtime Resolver & Cache Management**:
+- 运行时引用解析器：Agent 启动时自动解析 `skills`/`mcp_servers` 引用
+- 本地缓存目录：`~/.agent-hub/cache/skills/`、`~/.agent-hub/cache/mcp-servers/`
+- 缓存索引：`index.json` 记录版本、路径、下载时间、etag
+- CLI 缓存管理：`agent-deploy cache status`、`agent-deploy cache clean`、`agent-deploy cache update`
+
+**Migration Tool**:
+- `agent-deploy migrate --from 3.0 --to 3.1` 自动迁移工具
+- 将 `skills/*/agent.json`（`type: "skill"`）转换为 `skills/*/skill.json`
+- 将 `subagents` 中 `type: "skill"` 迁移至顶层 `skills` 数组
+
+**Specifications**:
+- `SPEC_skill_mcp_reference.md` — Skill & MCP 独立打包与引用机制完整 SPEC
+- `specs/market-skill-mcp-support.md` — 市场 Skill & MCP 支持规范
+- `specs/skill-system.md` — 更新至 v3.1（`skill.json` 为 Skill 唯一格式）
+- `specs/mcp-integration.md` — 更新至 v3.1（引用模式、混合模式）
+
+### Changed
+
+**Breaking Changes**:
+- Skill 统一使用 `skill.json` 定义，不再使用 `agent.json` + `type: "skill"`
+- `schema_version` 取值更新为 `"3.1"`（仍兼容 `"3.0"`）
+
+**Backward Compatible**:
+- 运行时仍支持解析 v3.0 的 `subagents type: "skill"` 格式（发出弃用警告）
+- 现有内联 `skills` 数组完全兼容（无 `ref` 字段时按内联处理）
+- 现有内联 MCP 配置完全兼容（无 `ref` 字段时按内联处理）
+
+### Deprecated
+
+- `subagents` 中 `type: "skill"`（迁移至顶层 `skills` 数组）
+- Skill 使用 `agent.json` 定义（迁移至 `skill.json`）
+
+---
+
 ## [3.0.0] - 2026-06-07
 
 ### Added
@@ -90,7 +145,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## Upcoming in v3.1
+## Upcoming in v3.2
 
 ### Planned Features
 
@@ -108,7 +163,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Status | Support Until | Notes |
 |---------|--------|---------------|-------|
-| 3.0.x | ✅ Current | - | Full support, active development |
+| 3.1.x | ✅ Current | - | Full support, active development |
+| 3.0.x | ⚠️ Maintenance | 2027-06-01 | Auto-converted to v3.1, no new features |
 | 2.0.x | ⚠️ Maintenance | 2027-06-01 | Auto-converted to v3, no new features |
 | 1.0.x | ❌ Deprecated | 2026-12-31 | Migrate to v2 or v3 |
 
@@ -116,8 +172,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Migration Timeline
 
+- **2026-06-23**: v3.1.0 released (Skill/MCP market references, independent packaging)
 - **2026-06-07**: v3.0.0 released
+- **2026-09-01**: v3.0 enters maintenance mode (security fixes only)
 - **2026-09-01**: v2 enters maintenance mode (security fixes only)
+- **2027-06-01**: v3.0 support ends
 - **2027-06-01**: v2 support ends
 - **2026-12-31**: v1 support ends
 

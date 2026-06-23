@@ -1,8 +1,8 @@
 # MCP Integration 规范
 
-**版本**: 3.0.0  
-**状态**: Draft  
-**最后更新**: 2026-06-07
+**版本**: 3.1.0
+**状态**: Draft
+**最后更新**: 2026-06-23
 
 ---
 
@@ -10,11 +10,15 @@
 
 MCP (Model Context Protocol) 集成让 Agent 能够调用外部工具和服务。在 Agent Protocol v3 中，MCP 配置可以**打包在 Agent 内部**一起发布，用户下载 Agent 时自动获得 MCP 集成能力。
 
+**v3.1 扩展**：新增**市场引用模式**，MCP Server 可独立打包发布到云端市场，Agent 通过 `ref` 引用而非内联打包，运行时自动解析、下载、缓存。支持内联、引用、混合三种模式。
+
 ### 核心理念
 
-✅ **Agent 是完整的包** - MCP 配置随 Agent 一起发布  
-✅ **开箱即用** - 用户只需配置 API Key，无需手动安装 MCP servers  
+✅ **Agent 是完整的包** - MCP 配置随 Agent 一起发布
+✅ **开箱即用** - 用户只需配置 API Key，无需手动安装 MCP servers
 ✅ **可移植** - Agent 在任何环境都能运行（本地 / 平台）
+✅ **按需引用** - MCP Server 可独立发布到市场，Agent 通过引用按需加载（v3.1 新增）
+✅ **缓存复用** - 引用的 MCP Server 自动缓存到本地，避免重复下载（v3.1 新增）
 
 ---
 
@@ -847,6 +851,307 @@ Kimi WebBridge Daemon (端口 10086)
 | running=true 但扩展不响应 | 扩展需要重新加载 | 刷新扩展页面，重启浏览器 |
 | HTTP 403/401 | token 不正确 | 设置 `WEBBRIDGE_TOKEN` 环境变量 |
 | 工具调用后页面没变化 | 页面尚未加载完成 | 在 snapshot 前加 `time.sleep(1)` 等待 |
+
+---
+
+## 9. 市场引用模式（v3.1 扩展）
+
+### 概述
+
+v3.1 在原有**内联打包**基础上，新增**市场引用模式**：MCP Server 可独立打包发布到云端市场，Agent 通过 `ref` 引用而非内联完整配置。运行时自动解析引用、下载依赖、缓存复用。
+
+### 三种使用模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| **内联打包**（现有） | MCP 配置随 Agent 一起发布，`mcp/` 目录打包在 Agent 内 | 自定义 MCP、私有部署、离线使用 |
+| **市场引用**（新增） | Agent 通过 `ref` 引用市场中的 MCP Server，运行时自动下载 | 公共 MCP Server、多 Agent 共享、版本管理 |
+| **混合**（推荐） | 部分内联 + 部分引用，灵活组合 | 大多数生产场景 |
+
+```
+模式 A: 内联打包（现有）          模式 B: 市场引用（新增）           模式 C: 混合（推荐）
+┌─────────────────────┐          ┌─────────────────────┐          ┌─────────────────────┐
+│ my-agent/           │          │ my-agent/           │          │ my-agent/           │
+│ ├── agent.json      │          │ ├── agent.json      │          │ ├── agent.json      │
+│ │   └── mcp: {      │          │ │   └── mcp_servers:│          │ │   └── mcp_servers:│
+│ │       config_path │          │ │       [{ref,      │          │ │       [{ref, ...},│
+│ │     }             │          │ │        version,   │          │ │        {name, ...}│
+│ │                   │          │ │        market_url}]│          │ │       ]           │
+│ └── mcp/            │          │ └── (无 mcp/ 目录)  │          │ ├── mcp/            │
+│     └── servers.json │          │                     │          │ │   └── local-mcp/   │
+│         (完整配置)   │          │ 运行时自动下载:      │          │     └── servers.json│
+└─────────────────────┘          │ ~/.agent-hub/cache/ │          └─────────────────────┘
+     自包含但臃肿                    └── mcp-servers/     │          灵活可控
+                                  └─────────────────────┘
+                                       精简但依赖网络
+```
+
+### MCPRef 引用格式
+
+agent.json 中 `mcp_servers` 数组元素新增引用字段：
+
+```typescript
+interface MCPRef {
+  // 模式 A: 内联完整定义（向后兼容）
+  name?: string;
+  description?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+
+  // 模式 B: 市场引用（新增）
+  ref?: string;           // 引用标识: "tapd" 或 "openpeng/tapd"
+  version?: string;       // 版本约束: "^1.0.0", ">=2.0.0", "*"
+  market_url?: string;    // 市场地址: "https://market.aitboy.cn"
+  source?: "inline" | "market" | "local";  // 来源类型
+
+  // 运行时覆盖（可选）
+  env_override?: Record<string, string>;  // 覆盖引用的 MCP 环境变量
+}
+```
+
+**解析规则**:
+- 如果 `ref` 存在 → 市场引用模式
+- 如果 `name` 存在且无 `ref` → 内联模式（向后兼容）
+- `source` 显式声明时以 `source` 为准
+
+### 版本约束语法
+
+| 语法 | 含义 | 示例 |
+|------|------|------|
+| `1.0.0` | 精确版本 | 只匹配 1.0.0 |
+| `^1.0.0` | 兼容版本 | 匹配 1.x.x，不匹配 2.0.0 |
+| `~1.0.0` | 近似版本 | 匹配 1.0.x，不匹配 1.1.0 |
+| `>=1.0.0` | 大于等于 | 匹配 1.0.0 及以上 |
+| `*` | 任意版本 | 匹配最新版本 |
+
+### MCP Server 独立包规范
+
+MCP Server 可独立打包发布到市场，结构如下：
+
+```
+tapd-mcp-server/
+├── mcp-server.json     # MCP Server 元数据（必需）
+├── mcp-config.json     # MCP 配置（Claude Desktop 兼容格式，必需）
+├── README.md           # 配置说明（必需）
+└── scripts/
+    └── install.sh      # 安装脚本（可选）
+```
+
+#### mcp-server.json 格式
+
+```json
+{
+  "schema_version": "1.0.0",
+  "identity": {
+    "name": "tapd",
+    "version": "1.0.0",
+    "display_name": "TAPD MCP Server",
+    "description": "TAPD project management MCP server",
+    "author": "OpenPeng",
+    "package": "@openpeng/mcp-tapd"
+  },
+  "config": {
+    "source": "file",
+    "file": "mcp-config.json"
+  },
+  "tools": [
+    "tapd_create_story",
+    "tapd_list_stories",
+    "tapd_update_story"
+  ],
+  "required_env": [
+    "TAPD_API_KEY",
+    "TAPD_WORKSPACE_ID"
+  ]
+}
+```
+
+#### mcp-config.json 格式
+
+```json
+{
+  "servers": {
+    "tapd": {
+      "command": "npx",
+      "args": ["-y", "@openpeng/mcp-tapd@^1.0.0"],
+      "env": {
+        "TAPD_API_KEY": "${TAPD_API_KEY}",
+        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
+      }
+    }
+  }
+}
+```
+
+### 运行时引用解析
+
+Agent 启动时，运行时自动解析 MCP 引用：
+
+```
+Agent 启动
+  │
+  ▼
+读取 agent.json mcp_servers 数组
+  │
+  ├── 内联定义（无 ref）→ 直接使用现有流程（§4 MCPLoader）
+  │
+  └── 引用定义（有 ref）→ 解析引用
+                                │
+                                ▼
+                          检查本地缓存
+                          ~/.agent-hub/cache/mcp-servers/{ref}@{version}/
+                                │
+                    ┌───────────┴───────────┐
+                    ▼                       ▼
+                缓存命中                缓存未命中
+                    │                       │
+                    ▼                       ▼
+                直接使用                从市场下载
+                加载 mcp-config.json    解压到缓存目录
+                应用 env_override       验证 mcp-server.json
+                    │                       │
+                    └───────────┬───────────┘
+                                ▼
+                          合并到 Agent MCP 配置
+                          启动 MCP Server 进程
+```
+
+### 缓存策略
+
+```
+~/.agent-hub/cache/
+├── mcp-servers/
+│   ├── tapd@1.0.0/
+│   │   ├── mcp-server.json
+│   │   ├── mcp-config.json
+│   │   └── README.md
+│   ├── kimi-webbridge@2.1.0/
+│   │   ├── mcp-server.json
+│   │   ├── mcp-config.json
+│   │   └── README.md
+│   └── ...
+└── index.json          # 缓存索引: {ref: {version, path, downloaded_at, etag}}
+```
+
+**缓存规则**:
+- 按 `ref@resolved_version` 目录存储
+- 下载时记录 `etag`，启动时检查是否需要更新
+- `version: "*"` 或 `^x.x.x` 时，每日检查一次最新版本
+- 缓存清理: `agent-deploy cache clean --unused-for 30d`
+
+### env_override：运行时环境变量覆盖
+
+引用的 MCP Server 可通过 `env_override` 在运行时覆盖环境变量，无需修改原始 MCP 配置：
+
+```json
+{
+  "mcp_servers": [
+    {
+      "ref": "tapd",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market",
+      "env_override": {
+        "TAPD_WORKSPACE_ID": "12345",
+        "TAPD_API_KEY": "${MY_CUSTOM_TAPD_KEY}"
+      }
+    }
+  ]
+}
+```
+
+**覆盖规则**:
+- `env_override` 中的值会**合并**到 MCP Server 原始 `env` 配置中
+- 同名变量以 `env_override` 为准
+- 支持 `${VAR_NAME}` 语法从运行时环境读取
+
+### CLI 命令
+
+```bash
+# 打包 MCP Server
+agent-deploy mcp pack <path> [-o, --output <file>]
+
+# 上传 MCP Server 到市场
+agent-deploy mcp upload <path> [-m, --market <url>] [-k, --api-key <key>] [-f, --force]
+
+# 从市场下载 MCP Server
+agent-deploy mcp download <ref> [-v, --version <ver>] [-o, --output <dir>]
+
+# 列出已缓存的 MCP Servers
+agent-deploy mcp list --cached
+
+# 缓存管理
+agent-deploy cache status
+agent-deploy cache clean [--all] [--unused-for <days>]
+agent-deploy cache update [--agent <path>] [--dry-run]
+```
+
+### agent.json 引用示例
+
+#### 纯引用模式
+
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "tapd-task-manager",
+    "version": "1.0.0",
+    "description": "Manages TAPD tasks using market-referenced MCP"
+  },
+  "entry": {"main_subagent": "worker"},
+  "subagents": [
+    {"name": "worker", "path": "worker.yaml"}
+  ],
+  "mcp_servers": [
+    {
+      "ref": "tapd",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market",
+      "env_override": {
+        "TAPD_WORKSPACE_ID": "${TAPD_WORKSPACE_ID}"
+      }
+    }
+  ]
+}
+```
+
+#### 混合模式（推荐）
+
+```json
+{
+  "schema_version": "3.0",
+  "identity": {
+    "name": "hybrid-agent",
+    "version": "1.0.0",
+    "description": "Mixed inline and referenced MCP servers"
+  },
+  "mcp_servers": [
+    {
+      "ref": "tapd",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "name": "kimi-webbridge",
+      "command": "npx",
+      "args": ["@kimi/webbridge-mcp"],
+      "source": "inline"
+    }
+  ]
+}
+```
+
+### 向后兼容性
+
+| 场景 | 兼容性 |
+|------|--------|
+| 现有内联 MCP 配置（`mcp/` 目录） | 完全兼容，无 `ref` 字段时按内联处理 |
+| 现有 `mcp_servers` 数组（内联定义） | 完全兼容，无 `ref` 字段时按内联处理 |
+| 现有 Agent 包下载 | 兼容，下载内容不变 |
+| 新引用模式 Agent | 需要运行时支持引用解析（agent-compose 升级后） |
 
 ---
 

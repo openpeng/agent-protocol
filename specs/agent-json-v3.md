@@ -1,8 +1,8 @@
 # agent.json v3 规范
 
-**版本**: 3.0.0  
+**版本**: 3.1.0  
 **状态**: Draft  
-**最后更新**: 2026-06-07
+**最后更新**: 2026-06-23
 
 ---
 
@@ -16,6 +16,12 @@ v3 版本引入了以下重大变更：
 - ✅ **dependencies** - 显式依赖声明
 - ✅ 向后兼容 v2 的 `instructions` 字段
 
+v3.1 扩展新增：
+- ✅ **顶层 skills 数组** — Skill 引用从 `subagents` 中的 `type: "skill"` 迁移至 `agent.json` 顶层 `skills` 数组，支持本地 Skill 路径引用和市场 `ref` 引用
+- ✅ **mcp_servers 市场引用** — `mcp_servers` 数组支持 `ref` 引用模式，通过市场下载 MCP Server 包而非内联配置
+- ✅ **版本约束语法** — 支持 `^`、`~`、`>=`、`*` 等语义化版本约束
+- ✅ **混合模式** — 同一 Agent 中部分 Skill/MCP 引用市场、部分内联本地
+
 ---
 
 ## 完整规范
@@ -24,14 +30,16 @@ v3 版本引入了以下重大变更：
 
 ```typescript
 interface AgentJsonV3 {
-  schema_version: "3.0";
+  schema_version: "3.1";
   identity: Identity;
   entry: Entry;
   subagents: Subagent[];
   dependencies?: Dependencies;
   category?: Category;
   type?: AgentType;
-  
+  skills?: SkillRef[];        // v3.1 新增：Skill 引用数组
+  mcp_servers?: MCPRef[];     // v3.1 新增：MCP Server 引用数组
+
   // v2 兼容（可选）
   instructions?: string | InstructionsObject;
   capabilities?: string[];
@@ -47,13 +55,13 @@ interface AgentJsonV3 {
 
 **类型**: `string`  
 **必填**: ✅  
-**取值**: `"3.0"`
+**取值**: `"3.1"`（兼容 `"3.0"`）
 
-指定 agent.json 的版本。
+指定 agent.json 的版本。v3.1 是 v3.0 的扩展，增加 `skills` 和 `mcp_servers` 数组，其余结构保持不变。
 
 ```json
 {
-  "schema_version": "3.0"
+  "schema_version": "3.1"
 }
 ```
 
@@ -433,7 +441,7 @@ Agent 的类型分类。
 ```typescript
 type AgentType = 
   | "agent"      // 完整的 Agent（默认）
-  | "skill";     // 可复用的 Skill（作为 subagent）
+  | "workflow";  // 工作流编排型 Agent
 ```
 
 #### 区别
@@ -441,58 +449,25 @@ type AgentType =
 **agent**（默认）：
 - 可独立发布到 Market
 - 有完整的 pipeline
-- 可以包含 Skills（作为 subagents）
+- 可以引用 Skills（通过顶层 `skills` 数组）
 
-**skill**：
-- 作为其他 Agent 的 subagent
-- 单一职责，参数化
-- 打包在 Agent 内部发布
+**workflow**：
+- 多子 Agent 编排
+- 强调流程协调
+- 通常包含 orchestrator + 多个 worker subagent
 
-#### 示例：Skill 定义
+#### 示例
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "3.1",
   "identity": {
-    "name": "text-summarizer",
+    "name": "code-auditor",
     "version": "1.0.0"
   },
-  "type": "skill",
-  "parameters": {
-    "text": {
-      "type": "string",
-      "required": true
-    },
-    "max_length": {
-      "type": "number",
-      "default": 200
-    }
-  }
-}
-```
-
-#### 示例：Agent 包含 Skills
-
-**目录结构**:
-```
-content-processor/
-├── agent.json
-├── orchestrator.yaml
-└── skills/                 # Skills 打包在 Agent 内
-    ├── text-summarizer/
-    │   ├── agent.json      # type: "skill"
-    │   └── worker.yaml
-    └── translator/
-        ├── agent.json
-        └── worker.yaml
-```
-
-**agent.json**:
-```json
-{
-  "schema_version": "3.0",
-  "identity": {
-    "name": "content-processor"
+  "type": "workflow",
+  "entry": {
+    "main_subagent": "orchestrator"
   },
   "subagents": [
     {
@@ -500,73 +475,257 @@ content-processor/
       "path": "orchestrator.yaml"
     },
     {
-      "name": "text-summarizer",
-      "path": "skills/text-summarizer/worker.yaml",
-      "type": "skill"
-    },
-    {
-      "name": "translator",
-      "path": "skills/translator/worker.yaml",
-      "type": "skill"
+      "name": "security-scanner",
+      "path": "security-scanner.yaml"
     }
   ]
 }
 ```
 
-详见：[Skill System 规范](./skill-system.md)
-
 ---
 
-### 9. parameters (Skill 专用)
+### 9. skills（Skill 引用）
 
-**类型**: `ParameterSchema`  
-**必填**: ❌（Skill 推荐使用）
+**类型**: `SkillRef[]`  
+**必填**: ❌（可选）
 
-当 `type: "skill"` 时，定义 Skill 的输入参数 schema。
+定义 Agent 引用的 Skills 列表。v3.1 将 Skill 引用从 `subagents` 中的 `type: "skill"` 迁移至 `agent.json` 顶层 `skills` 数组，支持**本地路径引用**和**市场 `ref` 引用**两种模式。
+
+> 详见：[Skill & MCP 独立打包与引用机制 SPEC](../../SPEC_skill_mcp_reference.md)
+
+#### SkillRef 类型定义
 
 ```typescript
-interface ParameterSchema {
-  [key: string]: {
-    type: "string" | "number" | "boolean" | "array" | "object";
-    required?: boolean;
-    default?: any;
-    enum?: any[];
-    description?: string;
-  };
+interface SkillRef {
+  // ---- 模式 A: 本地路径引用 ----
+  name?: string;              // Skill 名称（kebab-case）
+  path?: string;              // 本地 skill.json 文件路径（相对于 agent.json）
+  source?: "local" | "market"; // 来源类型
+
+  // ---- 模式 B: 市场引用（v3.1 新增） ----
+  ref?: string;               // 引用标识: "html-anything" 或 "openpeng/html-anything"
+  version?: string;           // 版本约束: "^1.0.0", ">=2.0.0", "*"
+  market_url?: string;        // 市场地址: "https://market.aitboy.cn"
 }
 ```
 
-#### 示例
+#### 解析规则
+
+| 条件 | 模式 | 行为 |
+|------|------|------|
+| 有 `ref` 字段 | 市场引用模式 | 从 `market_url` 下载 Skill 包，按 `version` 约束解析版本 |
+| 有 `path` 字段且无 `ref` | 本地引用模式 | 从指定 `path` 加载本地 Skill 包 |
+| `source` 显式声明 | 以 `source` 为准 | `source: "market"` → 市场引用；`source: "local"` → 本地引用 |
+
+#### 本地 Skill 示例
+
+引用打包在 Agent 内部的本地 Skill：
+
+**目录结构**:
+```
+content-processor/
+├── agent.json
+├── worker.yaml
+└── skills/
+    ├── text-summarizer/
+    │   ├── skill.json
+    │   └── worker.yaml
+    └── translator/
+        ├── skill.json
+        └── worker.yaml
+```
+
+**agent.json**:
+```json
+{
+  "schema_version": "3.1",
+  "identity": {
+    "name": "content-processor",
+    "version": "1.0.0"
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ],
+  "skills": [
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/skill.json",
+      "source": "local"
+    },
+    {
+      "name": "translator",
+      "path": "skills/translator/skill.json",
+      "source": "local"
+    }
+  ]
+}
+```
+
+#### 市场引用示例（v3.1 新增）
+
+从云端市场下载并引用 Skill：
 
 ```json
 {
-  "type": "skill",
-  "parameters": {
-    "text": {
-      "type": "string",
-      "required": true,
-      "description": "Text to process"
-    },
-    "max_length": {
-      "type": "number",
-      "default": 200,
-      "description": "Maximum output length"
-    },
-    "format": {
-      "type": "string",
-      "enum": ["bullets", "paragraph"],
-      "default": "bullets",
-      "description": "Output format"
+  "skills": [
+    {
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
     }
-  }
+  ]
 }
 ```
 
-Runtime 会在执行 Skill 前验证参数。
+#### 混合模式示例
+
+同一 Agent 中部分 Skill 引用市场、部分引用本地：
+
+```json
+{
+  "skills": [
+    {
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "name": "custom-skill",
+      "path": "skills/custom/skill.json",
+      "source": "local"
+    }
+  ]
+}
+```
 
 ---
 
-### 10. instructions (v2 兼容)
+### 10. mcp_servers（市场引用模式）
+
+**类型**: `MCPRef[]`  
+**必填**: ❌（可选）
+
+定义 Agent 依赖的 MCP Servers 列表。v3.1 扩展支持两种模式：**内联模式**（向后兼容）和**引用模式**（新增，从市场下载 MCP Server 包）。
+
+> 详见：[Skill & MCP 独立打包与引用机制 SPEC](../../SPEC_skill_mcp_reference.md)
+
+#### MCPRef 类型定义
+
+```typescript
+interface MCPRef {
+  // ---- 模式 A: 内联完整定义（向后兼容） ----
+  name?: string;              // MCP Server 名称
+  description?: string;       // 描述
+  command?: string;            // 启动命令（如 "npx"）
+  args?: string[];             // 启动参数
+  env?: Record<string, string>;  // 环境变量
+
+  // ---- 模式 B: 市场引用（v3.1 新增） ----
+  ref?: string;               // 引用标识: "tapd" 或 "openpeng/tapd"
+  version?: string;           // 版本约束
+  market_url?: string;        // 市场地址
+  source?: "inline" | "market" | "local";  // 来源类型
+
+  // ---- 运行时覆盖（引用模式可选） ----
+  env_override?: Record<string, string>;  // 覆盖引用的 env
+}
+```
+
+#### 解析规则
+
+| 条件 | 模式 | 行为 |
+|------|------|------|
+| 有 `ref` 字段 | 引用模式 | 从 `market_url` 下载 MCP Server 包，按 `version` 约束解析版本 |
+| 有 `name` 且无 `ref` | 内联模式 | 直接使用内联配置（向后兼容 v3.0） |
+| `source` 显式声明 | 以 `source` 为准 | `source: "market"` → 引用模式；`source: "inline"` → 内联模式 |
+
+#### 内联模式示例（向后兼容）
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "wecom-api",
+      "description": "企业微信开放平台 API",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-wecom"],
+      "env": {
+        "WECOM_CORPID": "${CORPID}",
+        "WECOM_CORPSECRET": "${CORPSECRET}"
+      }
+    }
+  ]
+}
+```
+
+#### 引用模式示例（v3.1 新增）
+
+```json
+{
+  "mcp_servers": [
+    {
+      "ref": "tapd",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market",
+      "env_override": {
+        "TAPD_WORKSPACE_ID": "12345"
+      }
+    }
+  ]
+}
+```
+
+#### 混合模式示例
+
+```json
+{
+  "mcp_servers": [
+    {
+      "ref": "tapd",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "name": "local-mcp",
+      "description": "Local development MCP server",
+      "command": "node",
+      "args": ["./mcp-servers/local/index.js"],
+      "env": {
+        "DEBUG": "true"
+      },
+      "source": "inline"
+    }
+  ]
+}
+```
+
+#### 版本约束语法
+
+`skills` 和 `mcp_servers` 引用模式共用以下版本约束语法：
+
+| 语法 | 含义 | 示例 | 匹配范围 |
+|------|------|------|---------|
+| `1.0.0` | 精确版本 | `"version": "1.0.0"` | 仅匹配 1.0.0 |
+| `^1.0.0` | 兼容版本 | `"version": "^1.0.0"` | 匹配 1.x.x，不匹配 2.0.0 |
+| `~1.0.0` | 近似版本 | `"version": "~1.0.0"` | 匹配 1.0.x，不匹配 1.1.0 |
+| `>=1.0.0` | 大于等于 | `"version": ">=1.0.0"` | 匹配 1.0.0 及以上所有版本 |
+| `*` | 任意版本 | `"version": "*"` | 匹配最新版本 |
+
+**解析优先级**：精确版本 > `^` 兼容 > `~` 近似 > `>=` 大于等于 > `*` 任意。运行时从市场查询所有可用版本，按语义化版本排序后匹配第一个满足约束的版本。
+
+---
+
+### 11. instructions (v2 兼容)
 
 **类型**: `string | InstructionsObject`  
 **必填**: ❌（v3 中可选，v2 中必填）
@@ -602,7 +761,7 @@ type Instructions = string | {
 
 // 自动转换为 v3
 {
-  "schema_version": "3.0",
+  "schema_version": "3.1",
   "identity": {...},
   "entry": {"main_subagent": "worker"},
   "subagents": [
@@ -624,13 +783,61 @@ type Instructions = string | {
 
 ---
 
+## 向后兼容
+
+### v3.0 到 v3.1 的变更
+
+| v3.0（已弃用） | v3.1（推荐） | 说明 |
+|---------------|-------------|------|
+| `subagents` 中 `type: "skill"` | 顶层 `skills` 数组 | v3.0 通过在 `subagents` 中设置 `type: "skill"` 来引用 Skill，v3.1 改为使用顶层 `skills` 数组 |
+
+#### v3.0 subagents type:"skill"（已弃用）
+
+```json
+{
+  "schema_version": "3.0",
+  "subagents": [
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/worker.yaml",
+      "type": "skill"
+    }
+  ]
+}
+```
+
+#### v3.1 等价写法（推荐）
+
+```json
+{
+  "schema_version": "3.1",
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ],
+  "skills": [
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/skill.json",
+      "source": "local"
+    }
+  ]
+}
+```
+
+> **注意**：v3.1 运行时仍支持解析 v3.0 的 `subagents type: "skill"` 格式，但会在加载时发出弃用警告。建议尽快迁移至新的 `skills` 数组格式。
+
+---
+
 ## 完整示例
 
 ### 示例 1: 最小 Agent
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "3.1",
   "identity": {
     "name": "hello-world",
     "version": "1.0.0",
@@ -654,7 +861,7 @@ type Instructions = string | {
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "3.1",
   "identity": {
     "name": "file-summarizer",
     "version": "2.1.0",
@@ -694,7 +901,7 @@ type Instructions = string | {
 
 ```json
 {
-  "schema_version": "3.0",
+  "schema_version": "3.1",
   "identity": {
     "name": "code-auditor",
     "version": "1.0.0",
@@ -742,6 +949,42 @@ type Instructions = string | {
 }
 ```
 
+### 示例 4: 引用 Skills 的 Agent
+
+```json
+{
+  "schema_version": "3.1",
+  "identity": {
+    "name": "content-processor",
+    "version": "1.0.0",
+    "description": "Process content with multiple skills",
+    "author": "OpenPeng"
+  },
+  "entry": {
+    "main_subagent": "worker"
+  },
+  "subagents": [
+    {
+      "name": "worker",
+      "path": "worker.yaml"
+    }
+  ],
+  "skills": [
+    {
+      "ref": "html-anything",
+      "version": "^1.0.0",
+      "market_url": "https://market.aitboy.cn",
+      "source": "market"
+    },
+    {
+      "name": "text-summarizer",
+      "path": "skills/text-summarizer/skill.json",
+      "source": "local"
+    }
+  ]
+}
+```
+
 ---
 
 ## 验证规则
@@ -753,8 +996,8 @@ function validateAgentJson(agent: any): ValidationResult {
   const errors: string[] = [];
   
   // schema_version
-  if (agent.schema_version !== "3.0") {
-    errors.push("schema_version must be '3.0'");
+  if (agent.schema_version !== "3.1" && agent.schema_version !== "3.0") {
+    errors.push("schema_version must be '3.1' or '3.0'");
   }
   
   // identity
@@ -828,7 +1071,7 @@ function validateReferences(agent: AgentJsonV3): ValidationResult {
 ```typescript
 function migrateV2ToV3(v2: AgentJsonV2): AgentJsonV3 {
   return {
-    schema_version: "3.0",
+    schema_version: "3.1",
     identity: v2.identity,
     entry: {
       main_subagent: "worker"
@@ -884,8 +1127,12 @@ ${instructions.split('\n').map(line => '        ' + line).join('\n')}
 - [worker.yaml 规范](./worker-yaml.md)
 - [Builtin Tools 规范](./builtin-tools.md)
 - [Subagent System 规范](./subagent-system.md)
+- [Skill System 规范](./skill-system.md)
+- [MCP Integration 规范](./mcp-integration.md)
+- [Market Skills & MCP 支持规范](./market-skill-mcp-support.md)
+- [Skill & MCP 独立打包与引用机制 SPEC](../../SPEC_skill_mcp_reference.md)
 - [v2 到 v3 迁移指南](../compatibility/migration-v2-to-v3.md)
 
 ---
 
-**agent.json v3 - 标准化的 Agent 元数据定义** 🎯
+**agent.json v3 - 标准化的 Agent 元数据定义**
